@@ -36,7 +36,6 @@
 # 문제가 생겼기면 
 [![Typing SVG](https://readme-typing-svg.demolab.com?font=roboto&duration=1000&pause=5000&color=09E84D&width=435&lines=%EB%AA%B0%EB%9D%BC%EC%9A%94)](https://git.io/typing-svg)
 
-# 안받으면 되어요
 
 # 마음껏 수정하세요 
 
