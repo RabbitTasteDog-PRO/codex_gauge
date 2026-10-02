@@ -2,6 +2,9 @@
 
 # 토큰 남은 사용량 보여주어요
 
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&center=true&random=true&width=435&lines=%EB%8B%B9%EC%97%B0%ED%9E%88+%EC%9C%A0%EB%A3%8C%EB%A7%8C+%EB%90%98%EC%96%B4%EC%9A%94)](https://git.io/typing-svg)
+
+
 ![남은 한도에 따라 변하는 도트 고양이와 메뉴 막대 게이지](docs/images/Codex_Gauge.gif)
 # 맥 전용이고 M1 이상만 되어요
 
