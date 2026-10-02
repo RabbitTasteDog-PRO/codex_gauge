@@ -27,6 +27,9 @@
 4. 앱 더블 클릭하고 브라우저에서 내 ChatGPT 계정으로 로그인해요. 
 5. 위에 고양이 뜨면 된 거예요.
 
+자동으로 켜지게 하려면:
+시스템 설정 → 일반 → 로그인 항목 및 확장 프로그램 → 로그인 시 열기 → + → Codex Gauge.app 
+
 실행이 막히면 출처를 확인하고 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**로 열어요.
 
 [![Typing SVG](https://readme-typing-svg.demolab.com?font=roboto&duration=1000&pause=5000&color=E87F2E&width=435&lines=%EA%B0%9C%EC%9D%B8%EC%A0%95%EB%B3%B4+%EC%88%98%EC%A7%91%ED%95%98%EC%A7%80+%EC%95%84%EB%82%98%EC%9A%94)](https://git.io/typing-svg)
