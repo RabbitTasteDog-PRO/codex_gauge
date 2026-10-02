@@ -6,6 +6,8 @@
 
 ![타이핑 문구](https://readme-typing-svg.demolab.com/?font=Noto+Sans+KR&size=30&color=FF69B4&width=400&lines=M1+이상만+되어요)
 
+![무지개 잔디](https://git-rainbow.com/RabbitTasteDog-PRO/svg)
+
 # 윈도우가 엄서서 몬만들어요
 
 # macOS 13 이상만 되어요 
