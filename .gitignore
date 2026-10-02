@@ -1,0 +1,39 @@
+# Swift Package Manager and build caches
+/.build/
+/.swiftpm/
+/build/
+/DerivedData/
+
+# Packaged apps and release artifacts
+/dist/
+*.app/
+*.xcarchive/
+*.dSYM/
+*.dmg
+*.pkg
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# macOS metadata
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Logs, test reports and coverage
+*.log
+*.xcresult/
+*.profraw
+*.profdata
+
+# Local environment and private signing keys
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.key

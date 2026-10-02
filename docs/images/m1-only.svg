@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="76" viewBox="0 0 460 76" role="img" aria-labelledby="title desc">
+  <title id="title">M1 이상만 되어요</title>
+  <desc id="desc">무지개색으로 빛나며 타이핑되는 M1 이상만 되어요 안내</desc>
+  <defs>
+    <linearGradient id="rainbow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0.000000" stop-color="#ff477e"><animate attributeName="stop-color" values="#ff477e;#ff9f1c;#ffe66d;#47e38b;#39bfff;#8a79ff;#f56bff;#ff477e" dur="5.6s" repeatCount="indefinite" /></stop>
+      <stop offset="0.142857" stop-color="#ff9f1c"><animate attributeName="stop-color" values="#ff9f1c;#ffe66d;#47e38b;#39bfff;#8a79ff;#f56bff;#ff477e;#ff9f1c" dur="5.6s" repeatCount="indefinite" /></stop>
+      <stop offset="0.285714" stop-color="#ffe66d"><animate attributeName="stop-color" values="#ffe66d;#47e38b;#39bfff;#8a79ff;#f56bff;#ff477e;#ff9f1c;#ffe66d" dur="5.6s" repeatCount="indefinite" /></stop>
+      <stop offset="0.428571" stop-color="#47e38b"><animate attributeName="stop-color" values="#47e38b;#39bfff;#8a79ff;#f56bff;#ff477e;#ff9f1c;#ffe66d;#47e38b" dur="5.6s" repeatCount="indefinite" /></stop>
+      <stop offset="0.571429" stop-color="#39bfff"><animate attributeName="stop-color" values="#39bfff;#8a79ff;#f56bff;#ff477e;#ff9f1c;#ffe66d;#47e38b;#39bfff" dur="5.6s" repeatCount="indefinite" /></stop>
+      <stop offset="0.714286" stop-color="#8a79ff"><animate attributeName="stop-color" values="#8a79ff;#f56bff;#ff477e;#ff9f1c;#ffe66d;#47e38b;#39bfff;#8a79ff" dur="5.6s" repeatCount="indefinite" /></stop>
+      <stop offset="0.857143" stop-color="#f56bff"><animate attributeName="stop-color" values="#f56bff;#ff477e;#ff9f1c;#ffe66d;#47e38b;#39bfff;#8a79ff;#f56bff" dur="5.6s" repeatCount="indefinite" /></stop>
+      <stop offset="1.000000" stop-color="#ff477e"><animate attributeName="stop-color" values="#ff477e;#ff9f1c;#ffe66d;#47e38b;#39bfff;#8a79ff;#f56bff;#ff477e" dur="5.6s" repeatCount="indefinite" /></stop>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="blur" />
+      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+    </filter>
+    <clipPath id="typing">
+      <rect x="57" y="0" width="346" height="76">
+        <animate attributeName="width" values="0;346;346;0" keyTimes="0;0.35;0.85;1" dur="7s" repeatCount="indefinite" />
+      </rect>
+    </clipPath>
+  </defs>
+  <g fill="url(#rainbow)" filter="url(#glow)">
+    <text x="230" y="50" text-anchor="middle" font-family="Apple SD Gothic Neo, Malgun Gothic, Noto Sans KR, sans-serif" font-size="34" font-weight="800" clip-path="url(#typing)">M1 이상만 되어요</text>
+    <path d="M28 25 L31 34 L40 37 L31 40 L28 49 L25 40 L16 37 L25 34 Z"><animate attributeName="opacity" values="0.35;1;0.35" dur="2.8s" repeatCount="indefinite" /></path>
+    <path d="M430 25 L433 34 L442 37 L433 40 L430 49 L427 40 L418 37 L427 34 Z"><animate attributeName="opacity" values="1;0.35;1" dur="2.8s" repeatCount="indefinite" /></path>
+  </g>
+</svg>
