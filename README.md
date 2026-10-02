@@ -8,7 +8,7 @@
 ![남은 한도에 따라 변하는 도트 고양이와 메뉴 막대 게이지](docs/images/Codex_Gauge.gif)
 # 맥 전용이고 M1 이상만 되어요
 
-[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code&duration=2000&pause=50000&color=E87F2E&width=435&lines=%EC%9C%88%EB%8F%84%EC%9A%B0%EA%B0%80+%EC%97%84%EC%84%9C%EC%84%9C+%EB%AA%AC%EB%A7%8C%EB%93%A4%EC%96%B4%EC%9A%94)](https://git.io/typing-svg)
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&width=435&lines=%EC%9C%88%EB%8F%84%EC%9A%B0%EB%8A%94+%EC%97%86%EC%96%B4%EC%84%9C+%EB%AA%BB+%EB%A7%8C%EB%93%A4%EC%96%B4%EC%9A%94)](https://git.io/typing-svg)
 
 
 # 인증되지 않은 앱 이어요
