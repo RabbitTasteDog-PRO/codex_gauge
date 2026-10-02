@@ -4,7 +4,9 @@
 
 ![남은 한도에 따라 변하는 도트 고양이와 메뉴 막대 게이지](docs/images/Codex_Gauge.gif)
 # 맥 전용이고 M1 이상만 되어요
-![타이핑 문구](https://readme-typing-svg.demolab.com/?font=Noto+Sans+KR&size=30&color=FF69B4&width=400&lines=윈도우가+엄서서+몬만들어요)
+
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code&duration=2000&pause=50000&color=E87F2E&width=435&lines=%EC%9C%88%EB%8F%84%EC%9A%B0%EA%B0%80+%EC%97%84%EC%84%9C%EC%84%9C+%EB%AA%AC%EB%A7%8C%EB%93%A4%EC%96%B4%EC%9A%94)](https://git.io/typing-svg)
+
 
 # 인증되지 않은 앱 이어요
 
@@ -24,11 +26,12 @@
 
 실행이 막히면 출처를 확인하고 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**로 열어요.
 
-# 개인정보 수집하지 않아요
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=roboto&duration=1000&pause=5000&color=E87F2E&width=435&lines=%EA%B0%9C%EC%9D%B8%EC%A0%95%EB%B3%B4+%EC%88%98%EC%A7%91%ED%95%98%EC%A7%80+%EC%95%84%EB%82%98%EC%9A%94)](https://git.io/typing-svg)
+
 
 
 # 문제가 생겼기면 
-## 몰라요
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=roboto&duration=1000&pause=5000&color=09E84D&width=435&lines=%EB%AA%B0%EB%9D%BC%EC%9A%94)](https://git.io/typing-svg)
 
 # 안받으면 되어요
 
