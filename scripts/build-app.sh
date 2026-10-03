@@ -16,7 +16,8 @@ app_dir="$project_dir/dist/Codex Gauge.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$bin_dir/CodexGauge" "$app_dir/Contents/MacOS/CodexGauge"
 cp "$project_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
-cp "$project_dir/Resources/CatSpriteSheet.png" "$app_dir/Contents/Resources/CatSpriteSheet.png"
+mkdir -p "$app_dir/Contents/Resources/IdleCats"
+cp "$project_dir/Resources/IdleCats/"*.png "$app_dir/Contents/Resources/IdleCats/"
 if [ -f "$project_dir/Resources/AppIcon.icns" ]; then
   cp "$project_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.icns"
 fi

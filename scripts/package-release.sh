@@ -37,7 +37,9 @@ trap 'rm -rf "$verification_dir"' EXIT
 /usr/bin/ditto -x -k "$archive" "$verification_dir"
 extracted="$verification_dir/Codex Gauge.app"
 test -x "$extracted/Contents/MacOS/CodexGauge"
-test -s "$extracted/Contents/Resources/CatSpriteSheet.png"
+for stage in plump rounded regular slender depleted; do
+  test -s "$extracted/Contents/Resources/IdleCats/$stage.png"
+done
 extracted_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extracted/Contents/Info.plist")"
 test "$extracted_version" = "$version"
 /usr/bin/codesign --verify --strict "$extracted"

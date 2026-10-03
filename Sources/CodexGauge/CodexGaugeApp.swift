@@ -32,7 +32,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
     private var appearanceObservation: NSKeyValueObservation?
     private var statusTimer: Timer?
     private let catRenderer = CatStatusRenderer()
-    private var catCycle = CatRunCycle()
+    private var catCycle = CatIdleCycle()
     private var animationImages: [NSImage] = []
     private var animationTimer: Timer?
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -151,9 +151,9 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         button.title = " " + (percent.map(GaugeStyle.percent) ?? "—") + (needsAttention ? " !" : "")
         let quotaTitle = store.selectedWindow?.title ?? "사용 가능한 한도 조회 중"
         let state = needsAttention ? " · 마지막 조회 값, 연결 상태 확인 필요" : ""
-        let cat = CatBodyStage.forRemainingPercent(percent).label
+        let cat = percent == nil ? "고양이 · 사료량 조회 중" : CatBodyStage.forRemainingPercent(percent).label
         button.toolTip = "\(cat) · Codex 남은 한도 · \(quotaTitle)\(state)"
-        button.setAccessibilityLabel("움직이는 고양이, 게이지, Codex 남은 한도")
+        button.setAccessibilityLabel("앉아 있는 고양이, 밥그릇, 게이지, Codex 남은 한도")
         button.setAccessibilityValue((percent.map(GaugeStyle.percent) ?? "조회되지 않음") + state)
     }
 
@@ -161,9 +161,9 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
     private func startAnimation() {
         guard animationTimer == nil, !animationSuspended,
               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let timer = Timer(timeInterval: CatRunCycle.frameInterval, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: CatIdleCycle.frameInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, !self.animationImages.isEmpty else { return }
+                guard let self, self.animationImages.count > 1 else { return }
                 self.catCycle.advance()
                 self.statusItem?.button?.image = self.animationImages[self.catCycle.frameIndex % self.animationImages.count]
             }
