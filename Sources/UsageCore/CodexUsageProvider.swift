@@ -29,18 +29,39 @@ public enum UsageProviderError: Error, LocalizedError, Sendable, Equatable {
 }
 
 /// Fetch quota and optional token activity without starting model inference or reading credentials.
-public struct CodexUsageProvider: UsageProviding {
+public struct CodexUsageProvider: UsageProviding, UsageSnapshotProviding {
     public init() {}
 
     /// Keep quota data usable even when this server does not offer account token activity.
     public func fetchUsage(executablePath: String?) async throws -> UsageReport {
+        let snapshot = try await fetchSnapshot(executablePath: executablePath)
+        guard snapshot.account?.supportsUsage == true else { throw UsageProviderError.subscriptionLoginRequired }
+        if let error = snapshot.usageError { throw error }
+        guard let report = snapshot.report else { throw UsageProviderError.invalidResponse }
+        return report
+    }
+
+    /// One short-lived child reads the account and its metrics in the same session.
+    public func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot {
         try Task.checkCancellation()
         let client = try await makeClient(executablePath: executablePath)
         defer { client.stop() }
         let account: AccountResponse = try await client.request("account/read", params: ["refreshToken": false])
         guard let identity = account.account, identity.supportsUsage else {
-            throw UsageProviderError.subscriptionLoginRequired
+            return UsageSnapshot(account: account.account)
         }
+        do {
+            let report = try await readUsage(client: client, identity: identity)
+            return UsageSnapshot(account: identity, report: report)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            return UsageSnapshot(account: identity, usageError: error as? UsageProviderError ?? .invalidResponse)
+        }
+    }
+
+    private func readUsage(client: AppServerClient, identity: CodexAccount) async throws -> UsageReport {
         let limits: RateLimitsResponse = try await client.request("account/rateLimits/read")
         var report = UsageReport(limits: limits, accountLabel: identity.planType.map { "Codex · \($0)" } ?? "Codex")
         do {

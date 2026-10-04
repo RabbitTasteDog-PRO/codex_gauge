@@ -119,3 +119,21 @@ public struct UsageReport: Codable, Sendable, Equatable {
 public protocol UsageProviding: Sendable {
     func fetchUsage(executablePath: String?) async throws -> UsageReport
 }
+
+/// Preserve a successful account read even when its subsequent quota request fails.
+public struct UsageSnapshot: Sendable {
+    public let account: CodexAccount?
+    public let report: UsageReport?
+    public let usageError: UsageProviderError?
+
+    public init(account: CodexAccount?, report: UsageReport? = nil, usageError: UsageProviderError? = nil) {
+        self.account = account
+        self.report = report
+        self.usageError = usageError
+    }
+}
+
+public protocol UsageSnapshotProviding: Sendable {
+    /// Throw only when the account itself could not be checked, or the operation was cancelled.
+    func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot
+}

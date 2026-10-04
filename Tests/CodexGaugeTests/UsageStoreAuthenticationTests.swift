@@ -5,6 +5,207 @@ import UsageCore
 
 final class UsageStoreAuthenticationTests: XCTestCase {
     @MainActor
+    func testInterruptedInitialAccountCheckResumesLoginOnceBeforeOldReadFinishes() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = InterruptedStartupSnapshotUsage()
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: LoginAuthentication())
+        defer { store.stop() }
+        var opened = 0
+        let startup = Task { await store.launch { _ in opened += 1; return true } }
+        for _ in 0..<100 {
+            if await provider.reads == 1 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let initialReads = await provider.reads
+        XCTAssertEqual(initialReads, 1)
+        store.suspendPollingForInactivity()
+        // The cancelled first read deliberately has not completed when wake arrives.
+        store.resumePollingAfterInactivity()
+        store.resumePollingAfterInactivity()
+        try await waitUntil { store.isLoggingIn && store.loginURL != nil }
+        XCTAssertEqual(opened, 1)
+        let resumedReads = await provider.reads
+        XCTAssertEqual(resumedReads, 2)
+        await provider.finishFirstRead()
+        await startup.value
+        XCTAssertEqual(opened, 1)
+    }
+
+    @MainActor
+    func testCancelledStartupLoginDoesNotReopenOnSleepWake() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = AlwaysSignedOutSnapshotUsage()
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: LoginAuthentication())
+        defer { store.stop() }
+        var opened = 0
+        await store.launch { _ in opened += 1; return true }
+        try await waitUntil { store.loginURL != nil }
+        await store.cancelLogin()
+        for _ in 0..<100 {
+            if await provider.reads >= 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        store.suspendPollingForInactivity()
+        store.resumePollingAfterInactivity()
+        for _ in 0..<100 {
+            if await provider.reads >= 3 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let reads = await provider.reads
+        XCTAssertEqual(reads, 3)
+        XCTAssertEqual(opened, 1)
+        XCTAssertFalse(store.isLoggingIn)
+        XCTAssertNil(store.loginURL)
+    }
+
+    @MainActor
+    func testSnapshotSignedOutLaunchAutomaticallyLogsIn() async throws {
+        try await assertSnapshotLaunchLogsIn(account: nil)
+    }
+
+    @MainActor
+    func testSnapshotAPIKeyLaunchAutomaticallyLogsIn() async throws {
+        try await assertSnapshotLaunchLogsIn(account: CodexAccount(type: "apiKey"))
+    }
+
+    @MainActor
+    private func assertSnapshotLaunchLogsIn(account: CodexAccount?) async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let auth = LoginAuthentication(account: account)
+        let provider = SnapshotUsage(snapshots: [UsageSnapshot(account: account), goodSnapshot(email: "login@example.com")])
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: auth)
+        defer { store.stop() }
+        var opened = 0
+        await store.launch { _ in opened += 1; return true }
+        try await waitUntil { store.isLoggingIn && store.loginURL != nil }
+        XCTAssertEqual(opened, 1)
+        await auth.completeLogin()
+        try await waitUntil { store.report != nil }
+        XCTAssertEqual(store.account?.email, "login@example.com")
+        let reads = await provider.snapshotReads
+        XCTAssertEqual(reads, 2)
+    }
+
+    @MainActor
+    func testSnapshotUnknownAccountDoesNotOpenBrowser() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = UsageStore(defaults: defaults, provider: FailedSnapshotUsage(), authentication: NoAccountReadsAuthentication())
+        defer { store.stop() }
+        var opened = 0
+        await store.launch { _ in opened += 1; return true }
+        XCTAssertEqual(opened, 0)
+        XCTAssertFalse(store.hasCheckedAccount)
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertFalse(store.isLoggingIn)
+    }
+
+    @MainActor
+    func testSnapshotPathDoesNotReadAccountAgain() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = SnapshotUsage(snapshots: [goodSnapshot(email: "one@example.com")])
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: NoAccountReadsAuthentication())
+        defer { store.stop() }
+        await store.refresh()
+        XCTAssertEqual(store.account?.email, "one@example.com")
+        XCTAssertNotNil(store.report)
+        let count = await provider.snapshotReads
+        XCTAssertEqual(count, 1)
+    }
+
+    @MainActor
+    func testAccountChangeClearsCachedUsageEvenWhenNewQuotaFails() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = SnapshotUsage(snapshots: [goodSnapshot(email: "old@example.com"),
+            UsageSnapshot(account: CodexAccount(type: "chatgpt", email: "new@example.com", planType: "plus"), usageError: .disconnected)])
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: NoAccountReadsAuthentication())
+        defer { store.stop() }
+        await store.refresh()
+        XCTAssertNotNil(defaults.data(forKey: "usageCache"))
+        await store.refresh()
+        XCTAssertEqual(store.account?.email, "new@example.com")
+        XCTAssertTrue(store.hasCheckedAccount)
+        XCTAssertNil(store.report)
+        XCTAssertNil(store.lastUpdated)
+        XCTAssertNil(defaults.data(forKey: "usageCache"))
+        XCTAssertNotNil(store.errorMessage)
+    }
+
+    @MainActor
+    func testSameAccountQuotaFailureKeepsItsPreviousMetrics() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let snapshot = goodSnapshot(email: "same@example.com")
+        let provider = SnapshotUsage(snapshots: [snapshot, UsageSnapshot(account: snapshot.account, usageError: .timedOut)])
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: NoAccountReadsAuthentication())
+        defer { store.stop() }
+        await store.refresh()
+        await store.refresh()
+        XCTAssertNotNil(store.report)
+        XCTAssertNotNil(defaults.data(forKey: "usageCache"))
+        XCTAssertTrue(store.isStale)
+    }
+
+    @MainActor
+    func testInactivityCancelsManualRefreshAndWakeRefreshesOnce() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = CancellableSnapshotUsage()
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: NoAccountReadsAuthentication())
+        defer { store.stop() }
+        let manualRefresh = Task { await store.refresh() }
+        for _ in 0..<100 {
+            if await provider.reads > 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        store.suspendPollingForInactivity()
+        await manualRefresh.value
+        let cancelled = await provider.cancelled
+        XCTAssertTrue(cancelled)
+        XCTAssertFalse(store.isRefreshing)
+        await store.refresh()
+        let suspendedReads = await provider.reads
+        XCTAssertEqual(suspendedReads, 1)
+        store.resumePollingAfterInactivity()
+        store.resumePollingAfterInactivity()
+        try await waitUntil { store.report != nil }
+        let resumedReads = await provider.reads
+        XCTAssertEqual(resumedReads, 2)
+    }
+
+    @MainActor
+    func testStopCancelsManualRefreshAndPreventsRestart() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = CancellableSnapshotUsage()
+        let store = UsageStore(defaults: defaults, provider: provider, authentication: NoAccountReadsAuthentication())
+        let manualRefresh = Task { await store.refresh() }
+        for _ in 0..<100 {
+            if await provider.reads > 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        store.stop()
+        await manualRefresh.value
+        store.start()
+        await store.refresh()
+        let reads = await provider.reads
+        XCTAssertEqual(reads, 1)
+        let cancelled = await provider.cancelled
+        XCTAssertTrue(cancelled)
+        XCTAssertNil(store.report)
+    }
+
+    private func goodSnapshot(email: String) -> UsageSnapshot {
+        UsageSnapshot(account: CodexAccount(type: "chatgpt", email: email, planType: "plus"),
+                      report: UsageReport(limits: RateLimitsResponse(rateLimits: RateLimitSnapshot(primary: RateWindow(usedPercent: 25)))))
+    }
+
+    @MainActor
     func testSignedOutLaunchAutomaticallyLogsInAndFetchesUsageWithoutCachingEmail() async throws {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -187,6 +388,76 @@ final class UsageStoreAuthenticationTests: XCTestCase {
         let suite = "Gauge-auth-store-test-\(UUID().uuidString)"
         return (UserDefaults(suiteName: suite)!, suite)
     }
+}
+
+private actor SnapshotUsage: UsageProviding, UsageSnapshotProviding {
+    private var snapshots: [UsageSnapshot]
+    private(set) var snapshotReads = 0
+    init(snapshots: [UsageSnapshot]) { self.snapshots = snapshots }
+    func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot {
+        snapshotReads += 1
+        return snapshots.removeFirst()
+    }
+    func fetchUsage(executablePath: String?) async throws -> UsageReport {
+        XCTFail("Snapshot-capable providers must bypass the legacy metrics method")
+        throw UsageProviderError.invalidResponse
+    }
+}
+
+private struct FailedSnapshotUsage: UsageProviding, UsageSnapshotProviding {
+    func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot { throw UsageProviderError.disconnected }
+    func fetchUsage(executablePath: String?) async throws -> UsageReport { throw UsageProviderError.invalidResponse }
+}
+
+private actor InterruptedStartupSnapshotUsage: UsageProviding, UsageSnapshotProviding {
+    private var continuation: CheckedContinuation<UsageSnapshot, Never>?
+    private(set) var reads = 0
+    func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot {
+        reads += 1
+        if reads == 1 {
+            // A late response proves wake does not wait for the old operation to finish.
+            return await withCheckedContinuation { continuation = $0 }
+        }
+        return UsageSnapshot(account: nil)
+    }
+    func finishFirstRead() {
+        continuation?.resume(returning: UsageSnapshot(account: nil))
+        continuation = nil
+    }
+    func fetchUsage(executablePath: String?) async throws -> UsageReport { throw UsageProviderError.invalidResponse }
+}
+
+private actor AlwaysSignedOutSnapshotUsage: UsageProviding, UsageSnapshotProviding {
+    private(set) var reads = 0
+    func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot {
+        reads += 1
+        return UsageSnapshot(account: nil)
+    }
+    func fetchUsage(executablePath: String?) async throws -> UsageReport { throw UsageProviderError.invalidResponse }
+}
+
+private struct NoAccountReadsAuthentication: AccountAuthenticating {
+    func readAccount(executablePath: String?) async throws -> CodexAccount? {
+        XCTFail("Snapshot refresh must not independently read the account")
+        throw UsageProviderError.invalidResponse
+    }
+    func beginLogin(executablePath: String?) async throws -> any CodexLoginSession { throw UsageProviderError.loginFailed }
+    func logout(executablePath: String?) async throws {}
+}
+
+private actor CancellableSnapshotUsage: UsageProviding, UsageSnapshotProviding {
+    private(set) var reads = 0
+    private(set) var cancelled = false
+    func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot {
+        reads += 1
+        if reads == 1 {
+            do { try await Task.sleep(nanoseconds: 10_000_000_000) }
+            catch { cancelled = true; throw error }
+        }
+        return UsageSnapshot(account: CodexAccount(type: "chatgpt", planType: "plus"),
+                             report: UsageReport(limits: RateLimitsResponse(rateLimits: RateLimitSnapshot(primary: RateWindow(usedPercent: 25)))))
+    }
+    func fetchUsage(executablePath: String?) async throws -> UsageReport { throw UsageProviderError.invalidResponse }
 }
 
 private actor FakeAuthentication: AccountAuthenticating {

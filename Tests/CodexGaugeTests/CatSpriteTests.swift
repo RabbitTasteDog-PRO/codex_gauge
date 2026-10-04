@@ -1,4 +1,6 @@
+import AppKit
 import XCTest
+import UsageCore
 @testable import CodexGauge
 
 final class CatSpriteTests: XCTestCase {
@@ -41,6 +43,17 @@ final class CatSpriteTests: XCTestCase {
                     XCTAssertEqual(images.first?.size.height, 24)
                     XCTAssertNotNil(images.first?.tiffRepresentation)
                     XCTAssertTrue(images[0] === renderer.menuFrames(remainingPercent: percent, isDark: dark)[0])
+                    let masks = renderer.masks[CatBodyStage.forRemainingPercent(percent).rawValue]
+                    XCTAssertEqual(Set(images.map { ObjectIdentifier($0) }).count, Set(masks.map(\.pixels)).count,
+                                   "Identical poses should share an image while preserving all timing slots")
+                    var imageForPixels: [[Bool]: NSImage] = [:]
+                    for (mask, image) in zip(masks, images) {
+                        if let previous = imageForPixels[mask.pixels] {
+                            XCTAssertTrue(previous === image)
+                        } else {
+                            imageForPixels[mask.pixels] = image
+                        }
+                    }
                 }
             }
             XCTAssertEqual(renderer.menuFrames(remainingPercent: nil, isDark: true).count, 1)

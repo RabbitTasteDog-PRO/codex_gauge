@@ -4,6 +4,42 @@ import XCTest
 @testable import UsageCore
 
 final class CodexUsageProviderTests: XCTestCase {
+    func testSnapshotUsesOneServerAndOneAccountRead() async throws {
+        let fixture = try MockServer()
+        defer { fixture.remove() }
+        let snapshot = try await CodexUsageProvider().fetchSnapshot(executablePath: fixture.executable.path)
+        XCTAssertEqual(snapshot.account?.planType, "plus")
+        XCTAssertNotNil(snapshot.report)
+        XCTAssertNil(snapshot.usageError)
+        let messages = try String(contentsOf: fixture.messages, encoding: .utf8).components(separatedBy: .newlines)
+        XCTAssertEqual(messages.filter { $0 == "START" }.count, 1)
+        XCTAssertEqual(messages.filter { $0.contains("account/read") }.count, 1)
+        XCTAssertEqual(messages.filter { $0.contains("account/rateLimits/read") }.count, 1)
+        try await assertProcessExited(fixture)
+    }
+
+    func testSnapshotRetainsAccountWhenQuotaCannotDecode() async throws {
+        let fixture = try MockServer(malformedLimits: true)
+        defer { fixture.remove() }
+        let snapshot = try await CodexUsageProvider().fetchSnapshot(executablePath: fixture.executable.path)
+        XCTAssertEqual(snapshot.account?.type, "chatgpt")
+        XCTAssertNil(snapshot.report)
+        XCTAssertEqual(snapshot.usageError, .invalidResponse)
+        try await assertProcessExited(fixture)
+    }
+
+    func testSignedOutSnapshotDoesNotRequestQuota() async throws {
+        let fixture = try MockServer(signedOut: true)
+        defer { fixture.remove() }
+        let snapshot = try await CodexUsageProvider().fetchSnapshot(executablePath: fixture.executable.path)
+        XCTAssertNil(snapshot.account)
+        XCTAssertNil(snapshot.report)
+        XCTAssertNil(snapshot.usageError)
+        let messages = try String(contentsOf: fixture.messages, encoding: .utf8)
+        XCTAssertFalse(messages.contains("account/rateLimits/read"))
+        try await assertProcessExited(fixture)
+    }
+
     func testProviderReadsFragmentedProtocolNotificationsAndTokens() async throws {
         let fixture = try MockServer(accountType: "chatgpt", tokenBehavior: .success, fragmentLimits: true)
         defer { fixture.remove() }
@@ -144,17 +180,21 @@ final class CodexUsageProviderTests: XCTestCase {
         let directory: URL
         let executable: URL
         let pidFile: URL
+        let messages: URL
 
         init(accountType: String = "chatgpt", tokenBehavior: TokenBehavior = .success,
              accountBehavior: AccountBehavior = .success, fragmentLimits: Bool = false,
-             malformedLimits: Bool = false, silent: Bool = false) throws {
+             malformedLimits: Bool = false, silent: Bool = false, signedOut: Bool = false) throws {
             let manager = FileManager.default
             directory = manager.temporaryDirectory.appendingPathComponent("CodexGauge-mock-\(UUID().uuidString)", isDirectory: true)
             executable = directory.appendingPathComponent("mock-codex")
             pidFile = directory.appendingPathComponent("server.pid")
+            messages = directory.appendingPathComponent("messages.txt")
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
 
-            let accountReply = accountBehavior == .disconnect ? "exit 0" : #"printf '{"id":%s,"result":{"account":{"type":"ACCOUNT_TYPE","planType":"plus"}}}\n' "$request_id""#.replacingOccurrences(of: "ACCOUNT_TYPE", with: accountType)
+            let accountReply = accountBehavior == .disconnect ? "exit 0" : signedOut
+                ? #"printf '{"id":%s,"result":{"account":null}}\n' "$request_id""#
+                : #"printf '{"id":%s,"result":{"account":{"type":"ACCOUNT_TYPE","planType":"plus"}}}\n' "$request_id""#.replacingOccurrences(of: "ACCOUNT_TYPE", with: accountType)
             let limitsReply: String
             if malformedLimits {
                 limitsReply = #"printf '{"id":%s,"result":{"rateLimits":{"primary":{"usedPercent":"bad"}}}}\n' "$request_id""#
@@ -174,7 +214,9 @@ final class CodexUsageProviderTests: XCTestCase {
             let script = #"""
             #!/bin/bash
             printf '%s\n' "$$" > 'PID_PATH'
+            printf 'START\n' >> 'MESSAGES_PATH'
             while IFS= read -r line; do
+              printf '%s\n' "$line" >> 'MESSAGES_PATH'
               case "$line" in
                 *'"initialized"'*) continue ;;
               esac
@@ -203,6 +245,7 @@ final class CodexUsageProviderTests: XCTestCase {
             done
             """#
                 .replacingOccurrences(of: "PID_PATH", with: pidFile.path.replacingOccurrences(of: "'", with: "'\\''"))
+                .replacingOccurrences(of: "MESSAGES_PATH", with: messages.path.replacingOccurrences(of: "'", with: "'\\''"))
                 .replacingOccurrences(of: "SILENT", with: silent ? "continue" : ":")
                 .replacingOccurrences(of: "LIMITS_REPLY", with: limitsReply)
                 .replacingOccurrences(of: "TOKEN_REPLY", with: tokenReply)

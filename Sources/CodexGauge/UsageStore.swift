@@ -24,15 +24,21 @@ final class UsageStore: ObservableObject {
     }
 
     private let defaults: UserDefaults
-    private let provider: any UsageProviding
+    private let snapshotProvider: any UsageSnapshotProviding
     private let authentication: any AccountAuthenticating
     private var pollingTask: Task<Void, Never>?
+    private var refreshTask: Task<UsageSnapshot, Error>?
     private var loginTask: Task<Void, Never>?
     private var loginSession: (any CodexLoginSession)?
     private var authOperationID: UUID?
     private var refreshGeneration = 0
     private var failureCount = 0
     private var didHandleLaunch = false
+    private var initialLaunchBrowser: ((URL) -> Bool)?
+    private var launchDecisionTask: Task<Void, Never>?
+    private var launchDecisionID: UUID?
+    private var pollingSuspended = false
+    private var isStopped = false
 
     private struct Cache: Codable {
         let report: UsageReport
@@ -42,7 +48,8 @@ final class UsageStore: ObservableObject {
     init(defaults: UserDefaults = .standard, provider: any UsageProviding = CodexUsageProvider(),
          authentication: any AccountAuthenticating = CodexAuthentication()) {
         self.defaults = defaults
-        self.provider = provider
+        snapshotProvider = (provider as? any UsageSnapshotProviding)
+            ?? AuthenticatedUsageAdapter(provider: provider, authentication: authentication)
         self.authentication = authentication
         selectedWindowID = defaults.string(forKey: "selectedWindowID") ?? "codex/primary"
         executablePath = defaults.string(forKey: "executablePath") ?? ""
@@ -67,20 +74,49 @@ final class UsageStore: ObservableObject {
 
     /// Check the account once per launch, then sign in or use its existing session.
     func launch(openBrowser: @escaping (URL) -> Bool) async {
-        guard !didHandleLaunch, !shouldTerminate else { return }
+        guard !didHandleLaunch, !shouldTerminate, !isStopped else { return }
         didHandleLaunch = true
-        await refresh()
-        guard !Task.isCancelled, !shouldTerminate, !isAuthenticating else { return }
-        if hasCheckedAccount, account?.supportsUsage != true {
-            login(openBrowser: openBrowser)
-        } else {
-            start(refreshImmediately: false)
+        initialLaunchBrowser = openBrowser
+        if let task = beginInitialLaunchDecision() { await task.value }
+    }
+
+    /// An interrupted first account check retains its login decision until activity resumes.
+    private func beginInitialLaunchDecision() -> Task<Void, Never>? {
+        guard initialLaunchBrowser != nil, !pollingSuspended, !isStopped,
+              !shouldTerminate, !isAuthenticating else { return nil }
+        if let launchDecisionTask { return launchDecisionTask }
+        let operation = UUID()
+        launchDecisionID = operation
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.launchDecisionID == operation {
+                    self.launchDecisionTask = nil
+                    self.launchDecisionID = nil
+                }
+            }
+            let generation = self.refreshGeneration
+            await self.refresh()
+            guard !Task.isCancelled, self.launchDecisionID == operation,
+                  generation == self.refreshGeneration, !self.pollingSuspended,
+                  !self.shouldTerminate, !self.isAuthenticating, !self.isStopped,
+                  let openBrowser = self.initialLaunchBrowser else { return }
+            self.initialLaunchBrowser = nil
+            if self.hasCheckedAccount, self.account?.supportsUsage != true {
+                self.login(openBrowser: openBrowser)
+            } else {
+                // A real account-check error ends startup without an automatic login.
+                self.start(refreshImmediately: false)
+            }
         }
+        launchDecisionTask = task
+        return task
     }
 
     /// Start once and keep polling even while the menu panel is closed.
     func start(refreshImmediately: Bool = true) {
-        guard pollingTask == nil, !shouldTerminate else { return }
+        guard pollingTask == nil, initialLaunchBrowser == nil, !shouldTerminate,
+              !isAuthenticating, !pollingSuspended, !isStopped else { return }
         pollingTask = Task { [weak self] in
             if !refreshImmediately {
                 do { try await Task.sleep(nanoseconds: 60_000_000_000) }
@@ -98,6 +134,8 @@ final class UsageStore: ObservableObject {
 
     /// Cancel background work when the application terminates.
     func stop() {
+        isStopped = true
+        initialLaunchBrowser = nil
         pausePolling()
         authOperationID = nil
         loginSession?.stop()
@@ -107,23 +145,51 @@ final class UsageStore: ObservableObject {
     }
 
     private func pausePolling() {
+        launchDecisionTask?.cancel()
+        launchDecisionTask = nil
+        launchDecisionID = nil
         pollingTask?.cancel()
         pollingTask = nil
+        refreshTask?.cancel()
+        refreshTask = nil
         refreshGeneration += 1
         isRefreshing = false
     }
 
+    /// Suspend metric work independently of browser login; wake schedules one fresh read.
+    func suspendPollingForInactivity() {
+        pollingSuspended = true
+        pausePolling()
+    }
+
+    func resumePollingAfterInactivity() {
+        guard pollingSuspended else { return }
+        pollingSuspended = false
+        if initialLaunchBrowser != nil { _ = beginInitialLaunchDecision() }
+        else { start() }
+    }
+
     /// Replace the cache only after a successful account-level usage query.
     func refresh() async {
-        guard !isRefreshing, !isAuthenticating, !shouldTerminate else { return }
+        guard !isRefreshing, !isAuthenticating, !shouldTerminate, !pollingSuspended, !isStopped else { return }
         let generation = refreshGeneration
         isRefreshing = true
-        defer { if generation == refreshGeneration { isRefreshing = false } }
+        defer {
+            if generation == refreshGeneration {
+                isRefreshing = false
+                refreshTask = nil
+            }
+        }
         let path = configuredPath
+        let task = Task { [snapshotProvider] in
+            try await snapshotProvider.fetchSnapshot(executablePath: path)
+        }
+        refreshTask = task
         do {
-            let currentAccount = try await authentication.readAccount(executablePath: path)
+            let snapshot = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             try Task.checkCancellation()
             guard generation == refreshGeneration else { return }
+            let currentAccount = snapshot.account
             if currentAccount != account { clearUsage() }
             account = currentAccount
             hasCheckedAccount = true
@@ -134,9 +200,8 @@ final class UsageStore: ObservableObject {
                 return
             }
             guard currentAccount.supportsUsage else { throw UsageProviderError.subscriptionLoginRequired }
-            let newReport = try await provider.fetchUsage(executablePath: path)
-            try Task.checkCancellation()
-            guard generation == refreshGeneration else { return }
+            if let error = snapshot.usageError { throw error }
+            guard let newReport = snapshot.report else { throw UsageProviderError.invalidResponse }
             report = newReport
             if !newReport.limits.windows.contains(where: { $0.id == selectedWindowID }), let first = newReport.limits.windows.first {
                 selectedWindowID = first.id
@@ -173,7 +238,8 @@ final class UsageStore: ObservableObject {
 
     /// The browser owns password entry; only a short-lived auth URL is held in memory.
     func login(openBrowser: @escaping (URL) -> Bool) {
-        guard !isAuthenticating, !shouldTerminate else { return }
+        guard !isAuthenticating, !shouldTerminate, !isStopped else { return }
+        initialLaunchBrowser = nil
         pausePolling()
         let operation = UUID()
         authOperationID = operation
@@ -210,6 +276,7 @@ final class UsageStore: ObservableObject {
     func cancelLogin() async {
         guard isLoggingIn, !isCancellingLogin else { return }
         isCancellingLogin = true
+        initialLaunchBrowser = nil
         authOperationID = nil
         if let session = loginSession { try? await session.cancel() }
         loginTask?.cancel()
@@ -219,7 +286,8 @@ final class UsageStore: ObservableObject {
 
     /// Request app termination only after the official server confirms logout.
     func logout() async {
-        guard !isAuthenticating, !shouldTerminate else { return }
+        guard !isAuthenticating, !shouldTerminate, !isStopped else { return }
+        initialLaunchBrowser = nil
         pausePolling()
         isAuthenticating = true
         authError = nil
@@ -248,5 +316,26 @@ final class UsageStore: ObservableObject {
         isAuthenticating = false
         isLoggingIn = false
         isCancellingLogin = false
+    }
+}
+
+/// Compatibility for independently injected authentication and metrics providers.
+/// The production provider implements UsageSnapshotProviding and bypasses this adapter.
+private struct AuthenticatedUsageAdapter: UsageSnapshotProviding {
+    let provider: any UsageProviding
+    let authentication: any AccountAuthenticating
+
+    func fetchSnapshot(executablePath: String?) async throws -> UsageSnapshot {
+        let account = try await authentication.readAccount(executablePath: executablePath)
+        try Task.checkCancellation()
+        guard let account, account.supportsUsage else { return UsageSnapshot(account: account) }
+        do {
+            return UsageSnapshot(account: account, report: try await provider.fetchUsage(executablePath: executablePath))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            return UsageSnapshot(account: account, usageError: error as? UsageProviderError ?? .invalidResponse)
+        }
     }
 }

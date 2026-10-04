@@ -36,7 +36,11 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
     private var animationImages: [NSImage] = []
     private var animationTimer: Timer?
     private var workspaceObservers: [NSObjectProtocol] = []
-    private var animationSuspended = false
+    private var backgroundActivity = BackgroundActivity()
+    private var pollingIsSuspended = false
+    private var powerObserver: NSObjectProtocol?
+    private let statusUpdates = StatusItemUpdateCoordinator()
+    private let statusPresenter = StatusItemPresenter()
 
     /// Native status item image and title remain visible independently of the panel.
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -47,8 +51,9 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(togglePanel(_:))
             button.imagePosition = .imageLeading
             button.imageScaling = .scaleNone
+            button.setAccessibilityLabel("앉아 있는 고양이, 밥그릇, 게이지, Codex 남은 한도")
             appearanceObservation = button.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
-                DispatchQueue.main.async { self?.updateStatusItem() }
+                DispatchQueue.main.async { self?.requestAppearanceCheck() }
             }
         }
 
@@ -57,19 +62,11 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = host
         popover.behavior = .transient
         popover.animates = true
-        updateStatusItem()
+        requestStatusUpdate()
 
         // ObservableObject publishes before changing properties, so render on the next turn.
         storeObservation = store.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if self.store.shouldTerminate {
-                    NSApplication.shared.terminate(nil)
-                    return
-                }
-                self.updateStatusItem()
-                self.resizePanel()
-            }
+            self?.requestStatusUpdate(resizePanelIfShown: true)
         }
         startupTask = Task { [weak self] in
             guard let self else { return }
@@ -84,7 +81,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         configureAnimationLifecycle()
         startAnimation()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateStatusItem() }
+            Task { @MainActor in self?.requestStatusUpdate() }
         }
 
         let hasShownPanel = UserDefaults.standard.bool(forKey: "didShowInitialPanel")
@@ -113,6 +110,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         statusTimer?.invalidate()
         animationTimer?.invalidate()
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        if let powerObserver { NotificationCenter.default.removeObserver(powerObserver) }
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
     }
 
@@ -137,67 +135,115 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         host.view.layoutSubtreeIfNeeded()
         let fitted = host.view.fittingSize
         let size = NSSize(width: 340, height: fitted.height > 0 ? fitted.height : 460)
-        host.preferredContentSize = size
-        popover.contentSize = size
+        if host.preferredContentSize != size { host.preferredContentSize = size }
+        if popover.contentSize != size { popover.contentSize = size }
     }
 
-    private func updateStatusItem() {
+    private func requestStatusUpdate(resizePanelIfShown: Bool = false) {
+        guard statusUpdates.requestContent(resizePanel: resizePanelIfShown) else { return }
+        enqueueStatusUpdate()
+    }
+
+    private func requestAppearanceCheck() {
+        guard statusUpdates.requestAppearanceCheck() else { return }
+        enqueueStatusUpdate()
+    }
+
+    private func enqueueStatusUpdate() {
+        DispatchQueue.main.async { [weak self] in self?.drainStatusUpdate() }
+    }
+
+    private func drainStatusUpdate() {
+        guard let button = statusItem?.button else { return }
+        if store.shouldTerminate {
+            NSApplication.shared.terminate(nil)
+            return
+        }
+        let isDark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let decision = statusUpdates.drain(isDark: isDark)
+        if decision.updateContent { updateStatusItem(isDark: isDark) }
+        if decision.resizePanel && popover.isShown { resizePanel() }
+    }
+
+    private func updateStatusItem(isDark: Bool) {
         guard let button = statusItem?.button else { return }
         let percent = store.selectedWindow?.quota.remainingPercent
-        let isDark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         animationImages = catRenderer.menuFrames(remainingPercent: percent, isDark: isDark)
-        button.image = animationImages[catCycle.frameIndex % animationImages.count]
+        if !animationImages.isEmpty {
+            statusPresenter.applyImage(animationImages[catCycle.frameIndex % animationImages.count], to: button)
+        }
         let needsAttention = store.isStale || store.errorMessage != nil
-        button.title = " " + (percent.map(GaugeStyle.percent) ?? "—") + (needsAttention ? " !" : "")
+        let title = " " + (percent.map(GaugeStyle.percent) ?? "—") + (needsAttention ? " !" : "")
         let quotaTitle = store.selectedWindow?.title ?? "사용 가능한 한도 조회 중"
         let state = needsAttention ? " · 마지막 조회 값, 연결 상태 확인 필요" : ""
         let cat = percent == nil ? "고양이 · 사료량 조회 중" : CatBodyStage.forRemainingPercent(percent).label
-        button.toolTip = "\(cat) · Codex 남은 한도 · \(quotaTitle)\(state)"
-        button.setAccessibilityLabel("앉아 있는 고양이, 밥그릇, 게이지, Codex 남은 한도")
-        button.setAccessibilityValue((percent.map(GaugeStyle.percent) ?? "조회되지 않음") + state)
+        statusPresenter.applyMetadata(.init(
+            title: title,
+            toolTip: "\(cat) · Codex 남은 한도 · \(quotaTitle)\(state)",
+            accessibilityValue: (percent.map(GaugeStyle.percent) ?? "조회되지 않음") + state
+        ), to: button)
+        reconcileBackgroundActivity()
     }
 
     /// Animation swaps cached images only; it never triggers a network request.
     private func startAnimation() {
-        guard animationTimer == nil, !animationSuspended,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard animationTimer == nil, backgroundActivity.allowsAnimation,
+              animationImages.count > 1 else { return }
         let timer = Timer(timeInterval: CatIdleCycle.frameInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.animationImages.count > 1 else { return }
+                guard let self, self.backgroundActivity.allowsAnimation,
+                      let button = self.statusItem?.button, self.animationImages.count > 1 else { return }
                 self.catCycle.advance()
-                self.statusItem?.button?.image = self.animationImages[self.catCycle.frameIndex % self.animationImages.count]
+                self.statusPresenter.applyImage(self.animationImages[self.catCycle.frameIndex % self.animationImages.count], to: button)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
         animationTimer = timer
     }
 
-    /// Respect sleep, inactive sessions and the user's Reduce Motion preference.
+    /// Keep independent pause reasons so a session wake cannot override a sleeping screen.
     private func configureAnimationLifecycle() {
         let center = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+        let events: [(Notification.Name, BackgroundActivity.PauseReason, Bool)] = [
+            (NSWorkspace.willSleepNotification, .systemSleep, true),
+            (NSWorkspace.didWakeNotification, .systemSleep, false),
+            (NSWorkspace.screensDidSleepNotification, .screenSleep, true),
+            (NSWorkspace.screensDidWakeNotification, .screenSleep, false),
+            (NSWorkspace.sessionDidResignActiveNotification, .inactiveSession, true),
+            (NSWorkspace.sessionDidBecomeActiveNotification, .inactiveSession, false)
+        ]
+        for (name, reason, paused) in events {
             workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
-                    self?.animationSuspended = true
-                    self?.animationTimer?.invalidate()
-                    self?.animationTimer = nil
-                }
-            })
-        }
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
-            workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in
-                    self?.animationSuspended = false
-                    self?.startAnimation()
+                    guard let self else { return }
+                    self.backgroundActivity.set(reason, paused: paused)
+                    self.reconcileBackgroundActivity()
                 }
             })
         }
         workspaceObservers.append(center.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                self?.animationTimer?.invalidate()
-                self?.animationTimer = nil
-                self?.startAnimation()
-            }
+            Task { @MainActor in self?.reconcileBackgroundActivity() }
         })
+        powerObserver = NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.reconcileBackgroundActivity() }
+        }
+        reconcileBackgroundActivity()
+    }
+
+    private func reconcileBackgroundActivity() {
+        backgroundActivity.set(.reduceMotion, paused: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        backgroundActivity.set(.lowPowerMode, paused: ProcessInfo.processInfo.isLowPowerModeEnabled)
+        let suspendPolling = !backgroundActivity.allowsPolling
+        if suspendPolling != pollingIsSuspended {
+            pollingIsSuspended = suspendPolling
+            if suspendPolling { store.suspendPollingForInactivity() }
+            else { store.resumePollingAfterInactivity() }
+        }
+        if backgroundActivity.allowsAnimation && animationImages.count > 1 {
+            startAnimation()
+        } else {
+            animationTimer?.invalidate()
+            animationTimer = nil
+        }
     }
 }

@@ -20,6 +20,7 @@ final class CatStatusRenderer {
     }
 
     let masks: [[PixelMask]]
+    let hasValidFrames: Bool
     private struct RenderKey: Equatable {
         let percent: Double?
         let isDark: Bool
@@ -30,13 +31,17 @@ final class CatStatusRenderer {
     init() {
         let sourceRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let decoded = CatBodyStage.allCases.map { stage -> [PixelMask] in
-            let bundled = Bundle.main.url(forResource: stage.resourceName, withExtension: "png", subdirectory: "IdleCats")
-            let source = bundled ?? sourceRoot.appendingPathComponent("Resources/IdleCats/\(stage.resourceName).png")
-            guard let data = try? Data(contentsOf: source), let sheet = NSBitmapImageRep(data: data) else { return [] }
-            return Self.decode(sheet, stage: stage)
+            // Discard PNG decoding and AppKit temporaries before loading the next sheet.
+            autoreleasepool {
+                let bundled = Bundle.main.url(forResource: stage.resourceName, withExtension: "png", subdirectory: "IdleCats")
+                let source = bundled ?? sourceRoot.appendingPathComponent("Resources/IdleCats/\(stage.resourceName).png")
+                guard let data = try? Data(contentsOf: source), let sheet = NSBitmapImageRep(data: data) else { return [] }
+                return Self.decode(sheet, stage: stage)
+            }
         }
         guard let full = decoded.first?.first, let empty = decoded.last?.first else {
             masks = decoded
+            hasValidFrames = Self.validate(decoded)
             return
         }
         // Use one approved bowl and mound as the scale reference for exact 100/75/50/25/0 food amounts.
@@ -48,7 +53,7 @@ final class CatStatusRenderer {
             return abs(a % PixelMask.width - 40) < abs(b % PixelMask.width - 40)
         }
         let portions = [1.0, 0.75, 0.5, 0.25, 0.0]
-        masks = decoded.enumerated().map { stage, frames in
+        let normalized = decoded.enumerated().map { stage, frames in
             frames.map { mask in
                 var pixels = mask.pixels
                 for index in pixels.indices where index % PixelMask.width >= PixelMask.catWidth {
@@ -58,10 +63,12 @@ final class CatStatusRenderer {
                 return PixelMask(pixels: pixels)
             }
         }
+        masks = normalized
+        hasValidFrames = Self.validate(normalized)
     }
 
-    var hasValidFrames: Bool {
-        masks.count == CatBodyStage.allCases.count && masks.allSatisfy {
+    private static func validate(_ frames: [[PixelMask]]) -> Bool {
+        frames.count == CatBodyStage.allCases.count && frames.allSatisfy {
             $0.count == CatIdleCycle.frameCount && $0.allSatisfy { $0.catPixelCount > 30 && $0.bowlPixelCount > 0 }
         }
     }
@@ -109,60 +116,64 @@ final class CatStatusRenderer {
         let aspect = (cellWidth / Double(width)) / (cellHeight * 0.82 / Double(height))
         var fixedBowl: [Bool]?
         return (0..<CatIdleCycle.frameCount).map { frame in
-            var source = Array(repeating: false, count: width * height)
-            for y in 0..<height {
-                for x in 0..<width {
-                    let sx = min(sheet.pixelsWide - 1, Int((Double(frame % 8) + (Double(x) + 0.5) / Double(width)) * cellWidth))
-                    let sy = min(sheet.pixelsHigh - 1, Int((Double(frame / 8) + 0.18 + 0.82 * (Double(y) + 0.5) / Double(height)) * cellHeight))
-                    let color = sheet.colorAt(x: sx, y: sy)?.usingColorSpace(.deviceRGB)
-                    source[y * width + x] = color.map { $0.alphaComponent >= 0.65 && min($0.redComponent, $0.greenComponent, $0.blueComponent) >= 0.7 } ?? false
-                }
-            }
-            let parts = components(source, width: width, height: height)
-            guard let body = parts.max(by: { $0.count < $1.count }),
-                  let dish = parts.filter({ $0.midX > body.midX && $0.minX > Int(body.midX) && $0.maxY >= body.maxY - 6 && $0.width >= $0.height * 2 && $0.width > 5 }).max(by: { $0.maxX < $1.maxX }) else {
-                return PixelMask(pixels: Array(repeating: false, count: PixelMask.width * PixelMask.height))
-            }
-            let split = min(dish.minX, (body.maxX + dish.minX) / 2)
-            let catPoints = source.enumerated().compactMap { i, visible -> (x: Int, y: Int)? in
-                visible && i % width < split ? (i % width, i / width) : nil
-            }
-            guard let top = catPoints.map(\.y).min(), let bottom = catPoints.map(\.y).max() else {
-                return PixelMask(pixels: Array(repeating: false, count: PixelMask.width * PixelMask.height))
-            }
-            let head = catPoints.filter { $0.y < top + (bottom - top + 1) * 2 / 5 }
-            let headCenter = Double((head.map(\.x).min() ?? body.minX) + (head.map(\.x).max() ?? body.maxX)) / 2
-            let scaleY = 22.0 / Double(bottom - top + 1)
-            let scaleX = scaleY * aspect
-            var pixels = Array(repeating: false, count: PixelMask.width * PixelMask.height)
-            func sample(_ sx: Double, _ sy: Double) -> Bool {
-                let x = Int(sx.rounded()), y = Int(sy.rounded())
-                return (0..<width).contains(x) && (0..<height).contains(y) && source[y * width + x]
-            }
-            for y in 0..<PixelMask.height {
-                let sy = Double(bottom) - Double(22 - y) / scaleY
-                // Normalize lower-body width in the slender stage; preserve the approved head and expression.
-                let bellyScale = stage == .slender && sy >= Double(top + (bottom - top + 1) * 2 / 5) ? 0.88 : 1.0
-                for x in 0..<PixelMask.catWidth {
-                    let sx = headCenter + Double(x - 16) / (scaleX * bellyScale)
-                    if sx < Double(split) { pixels[y * PixelMask.width + x] = sample(sx, sy) }
-                }
-            }
-            if fixedBowl == nil {
-                var bowl = Array(repeating: false, count: pixels.count)
-                let foodTop = source.enumerated().compactMap { i, visible in visible && i % width >= split ? i / width : nil }.min() ?? dish.minY
-                let bowlScaleX = 12.0 / Double(dish.width)
-                let bowlScaleY = min(bowlScaleX / aspect, 20.0 / Double(dish.maxY - foodTop + 1))
-                for y in 0..<PixelMask.height {
-                    for x in 34..<PixelMask.width {
-                        let sx = dish.midX + (Double(x) - 40.5) / bowlScaleX
-                        let sy = Double(dish.maxY) - Double(22 - y) / bowlScaleY
-                        bowl[y * PixelMask.width + x] = sx >= Double(split) && sample(sx, sy)
+            // colorAt/usingColorSpace create temporary Objective-C objects for each sample.
+            // The returned Swift mask survives the pool; intermediate colors do not.
+            autoreleasepool {
+                var source = Array(repeating: false, count: width * height)
+                for y in 0..<height {
+                    for x in 0..<width {
+                        let sx = min(sheet.pixelsWide - 1, Int((Double(frame % 8) + (Double(x) + 0.5) / Double(width)) * cellWidth))
+                        let sy = min(sheet.pixelsHigh - 1, Int((Double(frame / 8) + 0.18 + 0.82 * (Double(y) + 0.5) / Double(height)) * cellHeight))
+                        let color = sheet.colorAt(x: sx, y: sy)?.usingColorSpace(.deviceRGB)
+                        source[y * width + x] = color.map { $0.alphaComponent >= 0.65 && min($0.redComponent, $0.greenComponent, $0.blueComponent) >= 0.7 } ?? false
                     }
                 }
-                fixedBowl = bowl
+                let parts = components(source, width: width, height: height)
+                guard let body = parts.max(by: { $0.count < $1.count }),
+                      let dish = parts.filter({ $0.midX > body.midX && $0.minX > Int(body.midX) && $0.maxY >= body.maxY - 6 && $0.width >= $0.height * 2 && $0.width > 5 }).max(by: { $0.maxX < $1.maxX }) else {
+                    return PixelMask(pixels: Array(repeating: false, count: PixelMask.width * PixelMask.height))
+                }
+                let split = min(dish.minX, (body.maxX + dish.minX) / 2)
+                let catPoints = source.enumerated().compactMap { i, visible -> (x: Int, y: Int)? in
+                    visible && i % width < split ? (i % width, i / width) : nil
+                }
+                guard let top = catPoints.map(\.y).min(), let bottom = catPoints.map(\.y).max() else {
+                    return PixelMask(pixels: Array(repeating: false, count: PixelMask.width * PixelMask.height))
+                }
+                let head = catPoints.filter { $0.y < top + (bottom - top + 1) * 2 / 5 }
+                let headCenter = Double((head.map(\.x).min() ?? body.minX) + (head.map(\.x).max() ?? body.maxX)) / 2
+                let scaleY = 22.0 / Double(bottom - top + 1)
+                let scaleX = scaleY * aspect
+                var pixels = Array(repeating: false, count: PixelMask.width * PixelMask.height)
+                func sample(_ sx: Double, _ sy: Double) -> Bool {
+                    let x = Int(sx.rounded()), y = Int(sy.rounded())
+                    return (0..<width).contains(x) && (0..<height).contains(y) && source[y * width + x]
+                }
+                for y in 0..<PixelMask.height {
+                    let sy = Double(bottom) - Double(22 - y) / scaleY
+                    // Normalize lower-body width in the slender stage; preserve the approved head and expression.
+                    let bellyScale = stage == .slender && sy >= Double(top + (bottom - top + 1) * 2 / 5) ? 0.88 : 1.0
+                    for x in 0..<PixelMask.catWidth {
+                        let sx = headCenter + Double(x - 16) / (scaleX * bellyScale)
+                        if sx < Double(split) { pixels[y * PixelMask.width + x] = sample(sx, sy) }
+                    }
+                }
+                if fixedBowl == nil {
+                    var bowl = Array(repeating: false, count: pixels.count)
+                    let foodTop = source.enumerated().compactMap { i, visible in visible && i % width >= split ? i / width : nil }.min() ?? dish.minY
+                    let bowlScaleX = 12.0 / Double(dish.width)
+                    let bowlScaleY = min(bowlScaleX / aspect, 20.0 / Double(dish.maxY - foodTop + 1))
+                    for y in 0..<PixelMask.height {
+                        for x in 34..<PixelMask.width {
+                            let sx = dish.midX + (Double(x) - 40.5) / bowlScaleX
+                            let sy = Double(dish.maxY) - Double(22 - y) / bowlScaleY
+                            bowl[y * PixelMask.width + x] = sx >= Double(split) && sample(sx, sy)
+                        }
+                    }
+                    fixedBowl = bowl
+                }
+                return PixelMask(pixels: zip(pixels, fixedBowl!).map { $0.0 || $0.1 })
             }
-            return PixelMask(pixels: zip(pixels, fixedBowl!).map { $0.0 || $0.1 })
         }
     }
 
@@ -175,7 +186,10 @@ final class CatStatusRenderer {
         let stage = CatBodyStage.forRemainingPercent(percent).rawValue
         let gauge = GaugeStyle.menuImage(percent: percent, isDark: isDark)
         let frames = percent == nil ? [masks[stage][0]] : masks[stage]
+        var uniqueImages: [[Bool]: NSImage] = [:]
         cachedImages = frames.map { mask in
+            // Keep all 32 timing slots, but share image objects for identical pixel poses.
+            if let image = uniqueImages[mask.pixels] { return image }
             let image = NSImage(size: NSSize(width: 82, height: 24), flipped: false) { _ in
                 Self.draw(mask, at: .zero, isDark: isDark, showsBowl: percent != nil)
                 if percent == nil {
@@ -186,6 +200,7 @@ final class CatStatusRenderer {
                 return true
             }
             image.isTemplate = false
+            uniqueImages[mask.pixels] = image
             return image
         }
         cachedKey = key
