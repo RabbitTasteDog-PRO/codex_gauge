@@ -1,0 +1,44 @@
+{
+  "mode": "simulated-full-quota-tapping",
+  "seconds": 30,
+  "cpuMean": 1.63,
+  "cpuMax": 2.6,
+  "lastRssMB": 66.8,
+  "samples": [
+    {
+      "elapsedSeconds": 0,
+      "cpuPercent": 1.5,
+      "rssMB": 73.4
+    },
+    {
+      "elapsedSeconds": 5,
+      "cpuPercent": 2.2,
+      "rssMB": 73.8
+    },
+    {
+      "elapsedSeconds": 10,
+      "cpuPercent": 1.3,
+      "rssMB": 74.2
+    },
+    {
+      "elapsedSeconds": 15,
+      "cpuPercent": 2.6,
+      "rssMB": 74.2
+    },
+    {
+      "elapsedSeconds": 20,
+      "cpuPercent": 1.4,
+      "rssMB": 74.0
+    },
+    {
+      "elapsedSeconds": 25,
+      "cpuPercent": 1.1,
+      "rssMB": 74.0
+    },
+    {
+      "elapsedSeconds": 30,
+      "cpuPercent": 1.3,
+      "rssMB": 66.8
+    }
+  ]
+}

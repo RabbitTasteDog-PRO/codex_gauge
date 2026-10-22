@@ -1,0 +1,6 @@
+Codex Gauge v0.2.2
+70 tests passed, 0 failures.
+Native isolated demo: reset to 100%, automatic stop at 99%, click acknowledgement at 100% verified.
+Tapping demo CPU over 30 seconds: mean 1.63%, max 2.6%; RSS at final sample 66.8 MB.
+Release ZIP checksum and extracted app signature verified.
+Installed /Applications/Codex Gauge.app was not replaced.

@@ -4,11 +4,12 @@ import UsageCore
 
 enum GaugeStyle {
     /// Warn when the selected quota has little remaining capacity.
-    static func color(for percent: Double?) -> Color {
+    static func color(for percent: Double?, celebratingReset: Bool = false) -> Color {
         guard let percent else { return .secondary }
+        if celebratingReset && percent == 100 { return .green }
         if percent <= 5 { return .red }
         if percent <= 20 { return .orange }
-        return .accentColor
+        return .blue
     }
 
     static func percent(_ value: Double) -> String {
@@ -20,7 +21,7 @@ enum GaugeStyle {
     }
 
     /// AppKit status items reliably preserve a rendered image in the menu label.
-    static func menuImage(percent: Double?, isDark: Bool) -> NSImage {
+    static func menuImage(percent: Double?, isDark: Bool, celebratingReset: Bool = false) -> NSImage {
         let image = NSImage(size: NSSize(width: 28, height: 12), flipped: false) { bounds in
             let base = isDark ? NSColor.white : NSColor.black
             let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 5.5, yRadius: 5.5)
@@ -28,7 +29,8 @@ enum GaugeStyle {
             track.fill()
             if let percent {
                 let clamped = min(100, max(0, percent.isFinite ? percent : 0))
-                let fillColor: NSColor = clamped <= 5 ? .systemRed : (clamped <= 20 ? .systemOrange : .controlAccentColor)
+                let fillColor: NSColor = celebratingReset && clamped == 100 ? .systemGreen
+                    : (clamped <= 5 ? .systemRed : (clamped <= 20 ? .systemOrange : .systemBlue))
                 NSGraphicsContext.saveGraphicsState()
                 track.addClip()
                 fillColor.setFill()
@@ -57,6 +59,7 @@ enum GaugeStyle {
 private struct QuotaGauge: View {
     let percent: Double?
     let height: CGFloat
+    var celebratingReset = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -64,7 +67,7 @@ private struct QuotaGauge: View {
                 Capsule().fill(Color.primary.opacity(0.09))
                 if let percent {
                     Capsule()
-                        .fill(GaugeStyle.color(for: percent))
+                        .fill(GaugeStyle.color(for: percent, celebratingReset: celebratingReset))
                         .frame(width: max(0, geometry.size.width * CGFloat(percent / 100)))
                 }
                 Capsule().strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.7)
@@ -84,6 +87,17 @@ struct GaugePanel: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             accountCard
+            if store.isCelebratingReset {
+                Button { store.acknowledgeQuotaReset() } label: {
+                    Label("한도가 다시 찼어요! 눌러서 진정시키기", systemImage: "pawprint.fill")
+                        .font(.caption.weight(.medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(Color.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.green)
+            }
             quotaCard
             tokenCard
             if let error = store.errorMessage {
@@ -199,11 +213,11 @@ struct GaugePanel: View {
                     Text(GaugeStyle.percent(window.quota.remainingPercent))
                         .font(.system(size: 36, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(GaugeStyle.color(for: window.quota.remainingPercent))
+                        .foregroundStyle(GaugeStyle.color(for: window.quota.remainingPercent, celebratingReset: store.isCelebratingReset))
                     Spacer()
                     Text(window.durationLabel).font(.caption).foregroundStyle(.secondary)
                 }
-                QuotaGauge(percent: window.quota.remainingPercent, height: 7)
+                QuotaGauge(percent: window.quota.remainingPercent, height: 7, celebratingReset: store.isCelebratingReset)
                 Text(window.bucketName).font(.caption).foregroundStyle(.secondary)
                 if let reset = window.quota.resetDate {
                     TimelineView(.periodic(from: .now, by: 60)) { context in

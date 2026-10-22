@@ -1,0 +1,7 @@
+Codex Gauge v0.3.0 / build 5
+App metadata and usage client version aligned to 0.3.0.
+README animation and local document links verified.
+Earlier feature regression suite: 70 tests passed.
+After version metadata change: 10 provider tests passed.
+Release ZIP checksum, extracted version and code signature verified.
+Installed /Applications/Codex Gauge.app was not replaced.

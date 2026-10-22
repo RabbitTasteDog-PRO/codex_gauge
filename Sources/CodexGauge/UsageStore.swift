@@ -16,6 +16,7 @@ final class UsageStore: ObservableObject {
     @Published private(set) var authError: String?
     @Published private(set) var loginURL: URL?
     @Published private(set) var shouldTerminate = false
+    @Published private(set) var resetTracker = QuotaResetTracker()
     @Published var selectedWindowID: String {
         didSet { defaults.set(selectedWindowID, forKey: "selectedWindowID") }
     }
@@ -61,6 +62,15 @@ final class UsageStore: ObservableObject {
 
     var windows: [UsageWindow] { report?.limits.windows ?? [] }
     var selectedWindow: UsageWindow? { windows.first { $0.id == selectedWindowID } ?? windows.first }
+    var isCelebratingReset: Bool {
+        guard let window = selectedWindow else { return false }
+        return window.quota.usedPercent == 0 && resetTracker.pendingWindowIDs.contains(window.id)
+    }
+
+    func acknowledgeQuotaReset() {
+        guard let id = selectedWindow?.id, resetTracker.pendingWindowIDs.contains(id) else { return }
+        resetTracker.acknowledge(id)
+    }
     var isStale: Bool { errorMessage != nil || lastUpdated.map { Date().timeIntervalSince($0) > 180 } ?? true }
     var connectionLabel: String {
         if isLoggingIn { return "로그인 대기 중" }
@@ -202,6 +212,7 @@ final class UsageStore: ObservableObject {
             guard currentAccount.supportsUsage else { throw UsageProviderError.subscriptionLoginRequired }
             if let error = snapshot.usageError { throw error }
             guard let newReport = snapshot.report else { throw UsageProviderError.invalidResponse }
+            resetTracker.observe(newReport.limits.windows)
             report = newReport
             if !newReport.limits.windows.contains(where: { $0.id == selectedWindowID }), let first = newReport.limits.windows.first {
                 selectedWindowID = first.id
@@ -231,6 +242,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func clearUsage() {
+        resetTracker = QuotaResetTracker()
         report = nil
         lastUpdated = nil
         defaults.removeObject(forKey: "usageCache")

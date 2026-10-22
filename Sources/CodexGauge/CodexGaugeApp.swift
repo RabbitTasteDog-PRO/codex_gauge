@@ -9,12 +9,17 @@ struct CodexGaugeApp {
     /// Keep the delegate alive for the lifetime of this accessory application.
     static func main() {
         let app = NSApplication.shared
+        if let option = CommandLine.arguments.firstIndex(of: "--render-reset-preview"), CommandLine.arguments.indices.contains(option + 1) {
+            do { try CatStatusRenderer().writeResetPreview(to: URL(fileURLWithPath: CommandLine.arguments[option + 1])) }
+            catch { FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); exit(1) }
+            return
+        }
         if let option = CommandLine.arguments.firstIndex(of: "--render-preview"), CommandLine.arguments.indices.contains(option + 1) {
             do { try CatStatusRenderer().writePreview(to: URL(fileURLWithPath: CommandLine.arguments[option + 1])) }
             catch { FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); exit(1) }
             return
         }
-        let delegate = GaugeAppDelegate()
+        let delegate = GaugeAppDelegate(demoReset: CommandLine.arguments.contains("--demo-reset"))
         app.setActivationPolicy(.accessory)
         app.delegate = delegate
         withExtendedLifetime(delegate) { app.run() }
@@ -23,7 +28,8 @@ struct CodexGaugeApp {
 
 @MainActor
 final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
-    private let store = UsageStore()
+    private let store: UsageStore
+    private let demoReset: Bool
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private var hostingController: NSHostingController<GaugePanel>?
@@ -41,6 +47,18 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
     private var powerObserver: NSObjectProtocol?
     private let statusUpdates = StatusItemUpdateCoordinator()
     private let statusPresenter = StatusItemPresenter()
+
+    init(demoReset: Bool = false) {
+        self.demoReset = demoReset
+        if demoReset {
+            let defaults = UserDefaults(suiteName: "local.codexgauge.reset-preview")!
+            defaults.removePersistentDomain(forName: "local.codexgauge.reset-preview")
+            store = UsageStore(defaults: defaults, provider: ResetCelebrationDemoProvider())
+        } else {
+            store = UsageStore()
+        }
+        super.init()
+    }
 
     /// Native status item image and title remain visible independently of the panel.
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -74,6 +92,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
                 self?.showPanel()
                 return NSWorkspace.shared.open(url)
             }
+            if self.demoReset { await self.store.refresh() }
             if self.store.errorMessage != nil || self.store.authError != nil {
                 self.showPanel()
             }
@@ -115,6 +134,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePanel(_ sender: Any?) {
+        store.acknowledgeQuotaReset()
         if popover.isShown {
             popover.performClose(sender)
         } else {
@@ -168,7 +188,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusItem(isDark: Bool) {
         guard let button = statusItem?.button else { return }
         let percent = store.selectedWindow?.quota.remainingPercent
-        animationImages = catRenderer.menuFrames(remainingPercent: percent, isDark: isDark)
+        animationImages = catRenderer.menuFrames(remainingPercent: percent, isDark: isDark, celebratingReset: store.isCelebratingReset)
         if !animationImages.isEmpty {
             statusPresenter.applyImage(animationImages[catCycle.frameIndex % animationImages.count], to: button)
         }
@@ -177,10 +197,11 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         let quotaTitle = store.selectedWindow?.title ?? "사용 가능한 한도 조회 중"
         let state = needsAttention ? " · 마지막 조회 값, 연결 상태 확인 필요" : ""
         let cat = percent == nil ? "고양이 · 사료량 조회 중" : CatBodyStage.forRemainingPercent(percent).label
+        let resetNotice = store.isCelebratingReset ? " · 한도가 다시 찼어요! 클릭하면 평소 모습으로 돌아가요" : ""
         statusPresenter.applyMetadata(.init(
             title: title,
-            toolTip: "\(cat) · Codex 남은 한도 · \(quotaTitle)\(state)",
-            accessibilityValue: (percent.map(GaugeStyle.percent) ?? "조회되지 않음") + state
+            toolTip: "\(cat) · Codex 남은 한도 · \(quotaTitle)\(state)\(resetNotice)",
+            accessibilityValue: (percent.map(GaugeStyle.percent) ?? "조회되지 않음") + state + resetNotice
         ), to: button)
         reconcileBackgroundActivity()
     }

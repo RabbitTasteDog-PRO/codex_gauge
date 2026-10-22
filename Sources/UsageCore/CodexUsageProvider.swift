@@ -84,7 +84,7 @@ public struct CodexUsageProvider: UsageProviding, UsageSnapshotProviding {
         let client = try AppServerClient(executable: resolveExecutable(executablePath))
         do {
             let _: InitializationResult = try await client.request("initialize", params: [
-                "clientInfo": ["name": "codex_usage_menubar", "title": "Codex Usage Menu", "version": "0.1.0"],
+                "clientInfo": ["name": "codex_usage_menubar", "title": "Codex Usage Menu", "version": "0.3.0"],
                 "capabilities": ["experimentalApi": true]
             ])
             try client.initialized()
