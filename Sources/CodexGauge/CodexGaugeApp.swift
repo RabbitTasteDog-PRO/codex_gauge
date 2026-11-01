@@ -75,7 +75,9 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        let host = NSHostingController(rootView: GaugePanel(store: store))
+        let host = NSHostingController(rootView: GaugePanel(store: store, onLayoutChange: { [weak self] in
+            self?.requestStatusUpdate(resizePanelIfShown: true)
+        }))
         hostingController = host
         popover.contentViewController = host
         popover.behavior = .transient
@@ -154,7 +156,9 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         guard let host = hostingController else { return }
         host.view.layoutSubtreeIfNeeded()
         let fitted = host.view.fittingSize
-        let size = NSSize(width: 340, height: fitted.height > 0 ? fitted.height : 460)
+        // Never taller than the screen, so the footer buttons stay reachable.
+        let limit = (NSScreen.main?.visibleFrame.height ?? 800) - 20
+        let size = NSSize(width: 340, height: min(limit, fitted.height > 0 ? fitted.height : 460))
         if host.preferredContentSize != size { host.preferredContentSize = size }
         if popover.contentSize != size { popover.contentSize = size }
     }

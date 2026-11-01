@@ -126,14 +126,58 @@ private struct QuotaRow: View {
     }
 }
 
+private struct PanelContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct GaugePanel: View {
     @ObservedObject var store: UsageStore
+    /// Asks the popover to re-measure after the scrollable content changes height.
+    var onLayoutChange: () -> Void = {}
     @State private var showsSettings = false
     @State private var confirmsLogout = false
+    @State private var contentHeight: CGFloat = 0
+
+    /// Keep the header and footer on screen; only the middle scrolls when space runs out.
+    private var maxContentHeight: CGFloat {
+        let screen = NSScreen.main?.visibleFrame.height ?? 800
+        return max(240, screen - 230)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            ScrollView(.vertical, showsIndicators: contentHeight > maxContentHeight) {
+                scrollableContent
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: PanelContentHeightKey.self, value: proxy.size.height)
+                    })
+            }
+            .frame(height: contentHeight > 0 ? min(contentHeight, maxContentHeight) : nil)
+            .onPreferenceChange(PanelContentHeightKey.self) { height in
+                guard abs(height - contentHeight) > 0.5 else { return }
+                contentHeight = height
+                DispatchQueue.main.async { onLayoutChange() }
+            }
+            footer
+        }
+        .padding(18)
+        .frame(width: 340)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .popover(isPresented: $showsSettings, arrowEdge: .trailing) {
+            GaugeSettings(store: store)
+        }
+        .alert("Codex 계정에서 로그아웃할까요?", isPresented: $confirmsLogout) {
+            Button("취소", role: .cancel) {}
+            Button("로그아웃", role: .destructive) { Task { await store.logout() } }
+        } message: {
+            Text("로그아웃이 완료되면 저장된 사용량을 지우고 앱을 종료합니다. 기존 Codex 로그인 정보를 공유하므로 CLI·IDE 확장에서도 다시 로그인해야 할 수 있습니다.")
+        }
+    }
+
+    private var scrollableContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
             accountCard
             if store.isCelebratingReset {
                 Button { store.acknowledgeQuotaReset() } label: {
@@ -159,20 +203,8 @@ struct GaugePanel: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            footer
         }
-        .padding(18)
-        .frame(width: 340)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .popover(isPresented: $showsSettings, arrowEdge: .trailing) {
-            GaugeSettings(store: store)
-        }
-        .alert("Codex 계정에서 로그아웃할까요?", isPresented: $confirmsLogout) {
-            Button("취소", role: .cancel) {}
-            Button("로그아웃", role: .destructive) { Task { await store.logout() } }
-        } message: {
-            Text("로그아웃이 완료되면 저장된 사용량을 지우고 앱을 종료합니다. 기존 Codex 로그인 정보를 공유하므로 CLI·IDE 확장에서도 다시 로그인해야 할 수 있습니다.")
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var accountCard: some View {
