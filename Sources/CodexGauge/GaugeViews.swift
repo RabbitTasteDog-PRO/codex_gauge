@@ -3,6 +3,9 @@ import SwiftUI
 import UsageCore
 
 enum GaugeStyle {
+    /// Shown in the panel so the running build is never ambiguous.
+    static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+
     /// Warn when the selected quota has little remaining capacity.
     static func color(for percent: Double?, celebratingReset: Bool = false) -> Color {
         guard let percent else { return .secondary }
@@ -75,6 +78,51 @@ private struct QuotaGauge: View {
         }
         .frame(height: height)
         .accessibilityHidden(true)
+    }
+}
+
+/// A compact gauge for every quota; the checked one drives the menu bar gauge.
+private struct QuotaRow: View {
+    let window: UsageWindow
+    var isSelected = false
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .font(.body)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(window.title).font(.caption.weight(isSelected ? .semibold : .regular))
+                        Spacer()
+                        Text(GaugeStyle.percent(window.quota.remainingPercent))
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(GaugeStyle.color(for: window.quota.remainingPercent))
+                    }
+                    QuotaGauge(percent: window.quota.remainingPercent, height: 5)
+                    if let reset = window.quota.resetDate {
+                        TimelineView(.periodic(from: .now, by: 60)) { context in
+                            HStack {
+                                Text("초기화 · \(GaugeStyle.date(reset))")
+                                Spacer()
+                                Text(GaugeStyle.remaining(until: reset, now: context.date))
+                            }
+                            .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isSelected ? "메뉴 막대에 표시 중" : "체크하면 이 한도를 메뉴 막대에 표시")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(window.title), 남은 한도 \(GaugeStyle.percent(window.quota.remainingPercent))")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -177,7 +225,7 @@ struct GaugePanel: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Codex Gauge").font(.headline)
-                Text("구독 한도와 토큰 사용량")
+                Text("구독 한도와 토큰 사용량 · v\(GaugeStyle.appVersion)")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -196,17 +244,6 @@ struct GaugePanel: View {
             HStack {
                 Text("남은 한도").font(.subheadline.weight(.medium))
                 Spacer()
-                if store.windows.count > 1 {
-                    Picker("표시할 한도", selection: $store.selectedWindowID) {
-                        ForEach(store.windows) { window in
-                            Text(window.title).tag(window.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                    .help("메뉴 막대에 표시할 한도 선택")
-                }
             }
             if let window = store.selectedWindow {
                 HStack(alignment: .firstTextBaseline) {
@@ -234,6 +271,23 @@ struct GaugePanel: View {
                 } else {
                     Text("초기화 시각이 제공되지 않았습니다.")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                Divider().padding(.vertical, 2)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("한도별 게이지").font(.caption2.weight(.medium))
+                        Spacer()
+                        Text("체크한 한도가 메뉴 막대에 표시돼요").font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                    ForEach(store.windows) { item in
+                        QuotaRow(window: item, isSelected: item.id == window.id) { store.selectedWindowID = item.id }
+                    }
+                    if let claudeError = store.claudeError {
+                        Label(claudeError, systemImage: "exclamationmark.circle")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             } else {
                 Text("—").font(.system(size: 36, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)

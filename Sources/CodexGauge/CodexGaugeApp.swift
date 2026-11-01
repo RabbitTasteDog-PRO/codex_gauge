@@ -55,7 +55,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
             defaults.removePersistentDomain(forName: "local.codexgauge.reset-preview")
             store = UsageStore(defaults: defaults, provider: ResetCelebrationDemoProvider())
         } else {
-            store = UsageStore()
+            store = UsageStore(claudeProvider: ClaudeUsageProvider())
         }
         super.init()
     }
@@ -200,7 +200,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         let resetNotice = store.isCelebratingReset ? " · 한도가 다시 찼어요! 클릭하면 평소 모습으로 돌아가요" : ""
         statusPresenter.applyMetadata(.init(
             title: title,
-            toolTip: "\(cat) · Codex 남은 한도 · \(quotaTitle)\(state)\(resetNotice)",
+            toolTip: "\(cat) · 남은 한도 · \(quotaTitle)\(state)\(resetNotice)",
             accessibilityValue: (percent.map(GaugeStyle.percent) ?? "조회되지 않음") + state + resetNotice
         ), to: button)
         reconcileBackgroundActivity()

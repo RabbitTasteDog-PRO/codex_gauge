@@ -17,6 +17,8 @@ final class UsageStore: ObservableObject {
     @Published private(set) var loginURL: URL?
     @Published private(set) var shouldTerminate = false
     @Published private(set) var resetTracker = QuotaResetTracker()
+    @Published private(set) var claudeWindows: [UsageWindow] = []
+    @Published private(set) var claudeError: String?
     @Published var selectedWindowID: String {
         didSet { defaults.set(selectedWindowID, forKey: "selectedWindowID") }
     }
@@ -27,6 +29,8 @@ final class UsageStore: ObservableObject {
     private let defaults: UserDefaults
     private let snapshotProvider: any UsageSnapshotProviding
     private let authentication: any AccountAuthenticating
+    private let claudeProvider: (any ClaudeUsageProviding)?
+    private var isRefreshingClaude = false
     private var pollingTask: Task<Void, Never>?
     private var refreshTask: Task<UsageSnapshot, Error>?
     private var loginTask: Task<Void, Never>?
@@ -47,8 +51,10 @@ final class UsageStore: ObservableObject {
     }
 
     init(defaults: UserDefaults = .standard, provider: any UsageProviding = CodexUsageProvider(),
-         authentication: any AccountAuthenticating = CodexAuthentication()) {
+         authentication: any AccountAuthenticating = CodexAuthentication(),
+         claudeProvider: (any ClaudeUsageProviding)? = nil) {
         self.defaults = defaults
+        self.claudeProvider = claudeProvider
         snapshotProvider = (provider as? any UsageSnapshotProviding)
             ?? AuthenticatedUsageAdapter(provider: provider, authentication: authentication)
         self.authentication = authentication
@@ -60,7 +66,8 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    var windows: [UsageWindow] { report?.limits.windows ?? [] }
+    /// Codex quotas first, then Claude quotas; the checked one drives the menu bar.
+    var windows: [UsageWindow] { (report?.limits.windows ?? []) + claudeWindows }
     var selectedWindow: UsageWindow? { windows.first { $0.id == selectedWindowID } ?? windows.first }
     var isCelebratingReset: Bool {
         guard let window = selectedWindow else { return false }
@@ -182,6 +189,7 @@ final class UsageStore: ObservableObject {
     /// Replace the cache only after a successful account-level usage query.
     func refresh() async {
         guard !isRefreshing, !isAuthenticating, !shouldTerminate, !pollingSuspended, !isStopped else { return }
+        if claudeProvider != nil { Task { await self.refreshClaude() } }
         let generation = refreshGeneration
         isRefreshing = true
         defer {
@@ -214,9 +222,7 @@ final class UsageStore: ObservableObject {
             guard let newReport = snapshot.report else { throw UsageProviderError.invalidResponse }
             resetTracker.observe(newReport.limits.windows)
             report = newReport
-            if !newReport.limits.windows.contains(where: { $0.id == selectedWindowID }), let first = newReport.limits.windows.first {
-                selectedWindowID = first.id
-            }
+            // A saved Claude selection may arrive later than Codex; selectedWindow falls back meanwhile.
             lastUpdated = Date()
             errorMessage = nil
             failureCount = 0
@@ -233,6 +239,21 @@ final class UsageStore: ObservableObject {
             guard generation == refreshGeneration else { return }
             failureCount += 1
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Claude limits are read independently so a Codex failure never hides them (and vice versa).
+    func refreshClaude() async {
+        guard let claudeProvider, !isRefreshingClaude, !isStopped else { return }
+        isRefreshingClaude = true
+        defer { isRefreshingClaude = false }
+        do {
+            claudeWindows = try await claudeProvider.fetchWindows()
+            claudeError = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            claudeError = (error as? LocalizedError)?.errorDescription ?? "Claude 사용량을 가져오지 못했어요."
         }
     }
 
