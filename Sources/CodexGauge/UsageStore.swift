@@ -68,7 +68,11 @@ final class UsageStore: ObservableObject {
 
     /// Codex quotas first, then Claude quotas; the checked one drives the menu bar.
     var windows: [UsageWindow] { (report?.limits.windows ?? []) + claudeWindows }
-    var selectedWindow: UsageWindow? { windows.first { $0.id == selectedWindowID } ?? windows.first }
+    var selectedWindow: UsageWindow? {
+        if let selected = windows.first(where: { $0.id == selectedWindowID }) { return selected }
+        if selectedWindowID.hasPrefix("claude"), claudeError != nil { return nil }
+        return windows.first
+    }
     var isCelebratingReset: Bool {
         guard let window = selectedWindow else { return false }
         return window.quota.usedPercent == 0 && resetTracker.pendingWindowIDs.contains(window.id)
@@ -253,6 +257,7 @@ final class UsageStore: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
+            claudeWindows = []
             claudeError = (error as? LocalizedError)?.errorDescription ?? "Claude 사용량을 가져오지 못했어요."
         }
     }

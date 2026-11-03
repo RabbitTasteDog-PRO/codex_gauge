@@ -197,7 +197,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         if !animationImages.isEmpty {
             statusPresenter.applyImage(animationImages[catCycle.frameIndex % animationImages.count], to: button)
         }
-        let needsAttention = store.isStale || store.errorMessage != nil
+        let needsAttention = store.isStale || store.errorMessage != nil || (store.selectedWindowID.hasPrefix("claude") && store.claudeError != nil)
         let title = " " + (percent.map(GaugeStyle.percent) ?? "—") + (needsAttention ? " !" : "")
         let quotaTitle = store.selectedWindow?.title ?? "사용 가능한 한도 조회 중"
         let state = needsAttention ? " · 마지막 조회 값, 연결 상태 확인 필요" : ""

@@ -256,7 +256,7 @@ struct GaugePanel: View {
                 Circle()
                     .fill(store.errorMessage != nil || store.isStale ? Color.orange : (store.report != nil ? Color.green : Color.secondary))
                     .frame(width: 5, height: 5)
-                Text(store.connectionLabel).font(.caption2)
+                Text("Codex · \(store.connectionLabel)").font(.caption2)
             }
             .foregroundStyle(.secondary)
         }
@@ -277,24 +277,23 @@ struct GaugePanel: View {
                         .foregroundStyle(GaugeStyle.color(for: window.quota.remainingPercent, celebratingReset: store.isCelebratingReset))
                 }
                 QuotaGauge(percent: window.quota.remainingPercent, height: 5, celebratingReset: store.isCelebratingReset)
-                Divider()
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("메뉴 막대에 표시할 한도")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    ForEach(store.windows) { item in
-                        QuotaRow(window: item, isSelected: item.id == window.id) { store.selectedWindowID = item.id }
-                    }
-                    if let claudeError = store.claudeError {
-                        Label(claudeError, systemImage: "exclamationmark.circle")
-                            .font(.caption2).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
             } else {
                 Text("남은 한도").font(.caption.weight(.medium))
                 Text("—").font(.system(size: 22, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
-                Text(store.isRefreshing ? "Codex 사용량을 조회하고 있습니다." : "Codex 연결 후 사용 가능한 한도를 표시합니다.")
+                Text(store.claudeError != nil && store.selectedWindowID.hasPrefix("claude") ? "Claude 한도를 확인할 수 없습니다." : (store.isRefreshing ? "Codex 사용량을 조회하고 있습니다." : "사용 가능한 한도를 기다리고 있습니다."))
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            if !store.windows.isEmpty {
+                Divider()
+                Text("메뉴 막대에 표시할 한도").font(.caption2).foregroundStyle(.secondary)
+                ForEach(store.windows) { item in
+                    QuotaRow(window: item, isSelected: item.id == store.selectedWindowID) { store.selectedWindowID = item.id }
+                }
+            }
+            if let claudeError = store.claudeError {
+                Label(claudeError, systemImage: "exclamationmark.circle")
+                    .font(.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(12)
@@ -354,7 +353,7 @@ struct GaugePanel: View {
                     ProgressView().controlSize(.mini)
                     Text("갱신 중")
                 } else if let lastUpdated = store.lastUpdated {
-                    Text("마지막 갱신 · \(GaugeStyle.date(lastUpdated))")
+                    Text("Codex 갱신 · \(GaugeStyle.date(lastUpdated))")
                 } else {
                     Text("아직 조회되지 않았습니다.")
                 }
