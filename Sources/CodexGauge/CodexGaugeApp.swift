@@ -149,14 +149,19 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController?.view.window?.makeKey()
     }
 
-    /// Size the native popover from the SwiftUI panel's current content.
+    /// Give SwiftUI the actual viewport instead of clipping its natural content height.
     private func resizePanel() {
         guard let host = hostingController else { return }
-        host.view.layoutSubtreeIfNeeded()
-        let fitted = host.view.fittingSize
-        let size = NSSize(width: 340, height: fitted.height > 0 ? fitted.height : 460)
-        if host.preferredContentSize != size { host.preferredContentSize = size }
+        let screen = statusItem?.button?.window?.screen ?? NSScreen.main
+        // Leave room for the popover arrow and edges on the status item's display.
+        let limit = max(1, (screen?.visibleFrame.height ?? 800) - 40)
+        let size = NSSize(width: 340, height: min(480, limit))
+        if host.preferredContentSize != size {
+            host.rootView = GaugePanel(store: store, height: size.height)
+            host.preferredContentSize = size
+        }
         if popover.contentSize != size { popover.contentSize = size }
+        host.view.setFrameSize(size)
     }
 
     private func requestStatusUpdate(resizePanelIfShown: Bool = false) {
@@ -192,7 +197,7 @@ final class GaugeAppDelegate: NSObject, NSApplicationDelegate {
         if !animationImages.isEmpty {
             statusPresenter.applyImage(animationImages[catCycle.frameIndex % animationImages.count], to: button)
         }
-        let needsAttention = store.isStale || store.errorMessage != nil
+        let needsAttention = store.isStale || store.errorMessage != nil || (store.selectedWindowID.hasPrefix("claude") && store.claudeError != nil)
         let title = " " + (percent.map(GaugeStyle.percent) ?? "—") + (needsAttention ? " !" : "")
         let quotaTitle = store.selectedWindow?.title ?? "사용 가능한 한도 조회 중"
         let state = needsAttention ? " · 마지막 조회 값, 연결 상태 확인 필요" : ""
