@@ -3,6 +3,14 @@ import XCTest
 @testable import UsageCore
 
 final class ClaudeUsageProviderTests: XCTestCase {
+    func testRetryAfterAcceptsPositiveSecondsAndHTTPDate() {
+        let now = Date(timeIntervalSince1970: 0)
+        XCTAssertEqual(ClaudeUsageProvider.retryDelay(from: "120", now: now), 120)
+        XCTAssertEqual(ClaudeUsageProvider.retryDelay(from: "Thu, 01 Jan 1970 00:05:00 GMT", now: now), 300)
+        XCTAssertNil(ClaudeUsageProvider.retryDelay(from: "0", now: now))
+        XCTAssertNil(ClaudeUsageProvider.retryDelay(from: "invalid", now: now))
+        XCTAssertNil(ClaudeUsageProvider.retryDelay(from: "inf", now: now))
+    }
     func testParsesKnownLimitsInOrderAndSkipsNulls() throws {
         let json = #"""
         {"five_hour":{"utilization":12.5,"resets_at":"2026-11-01T10:00:00.123+00:00"},

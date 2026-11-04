@@ -19,6 +19,14 @@ enum GaugeStyle {
         value.formatted(.number.precision(.fractionLength(0))) + "%"
     }
 
+    static func compactTokens(_ value: Int64) -> String {
+        let unit: (divisor: Double, suffix: String)
+        if value >= 100_000_000 { unit = (100_000_000, "억") }
+        else if value >= 10_000 { unit = (10_000, "만") }
+        else { return value.formatted() }
+        return (Double(value) / unit.divisor).formatted(.number.precision(.fractionLength(0...1))) + unit.suffix
+    }
+
     static func date(_ date: Date) -> String {
         date.formatted(.dateTime.locale(Locale(identifier: "ko_KR")).month().day().hour().minute())
     }
@@ -85,6 +93,7 @@ private struct QuotaGauge: View {
 private struct QuotaRow: View {
     let window: UsageWindow
     var isSelected = false
+    var isStale = false
     let select: () -> Void
 
     var body: some View {
@@ -94,9 +103,10 @@ private struct QuotaRow: View {
                     .font(.body)
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline) {
                         Text(window.title).font(.caption.weight(isSelected ? .semibold : .regular))
+                        if isStale { Text("이전 값").font(.caption2).foregroundStyle(.orange) }
                         Spacer()
                         Text(GaugeStyle.percent(window.quota.remainingPercent))
                             .font(.caption.weight(.semibold))
@@ -121,19 +131,46 @@ private struct QuotaRow: View {
         .buttonStyle(.plain)
         .help(isSelected ? "메뉴 막대에 표시 중" : "체크하면 이 한도를 메뉴 막대에 표시")
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(window.title), 남은 한도 \(GaugeStyle.percent(window.quota.remainingPercent))")
+        .accessibilityLabel("\(window.title), \(isStale ? "이전 조회 값, " : "")남은 한도 \(GaugeStyle.percent(window.quota.remainingPercent))")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
 struct GaugePanel: View {
     @ObservedObject var store: UsageStore
+    /// AppKit supplies the same height to the view and its popover.
+    var height: CGFloat = 480
     @State private var showsSettings = false
     @State private var confirmsLogout = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             header
+                .fixedSize(horizontal: false, vertical: true)
+            ScrollView(.vertical) {
+                scrollableContent
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            footer
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 340, height: height)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .popover(isPresented: $showsSettings, arrowEdge: .trailing) {
+            GaugeSettings(store: store)
+        }
+        .alert("Codex 계정에서 로그아웃할까요?", isPresented: $confirmsLogout) {
+            Button("취소", role: .cancel) {}
+            Button("로그아웃", role: .destructive) { Task { await store.logout() } }
+        } message: {
+            Text("로그아웃이 완료되면 저장된 사용량을 지우고 앱을 종료합니다. 기존 Codex 로그인 정보를 공유하므로 CLI·IDE 확장에서도 다시 로그인해야 할 수 있습니다.")
+        }
+    }
+
+    private var scrollableContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
             accountCard
             if store.isCelebratingReset {
                 Button { store.acknowledgeQuotaReset() } label: {
@@ -159,20 +196,8 @@ struct GaugePanel: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            footer
         }
-        .padding(18)
-        .frame(width: 340)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .popover(isPresented: $showsSettings, arrowEdge: .trailing) {
-            GaugeSettings(store: store)
-        }
-        .alert("Codex 계정에서 로그아웃할까요?", isPresented: $confirmsLogout) {
-            Button("취소", role: .cancel) {}
-            Button("로그아웃", role: .destructive) { Task { await store.logout() } }
-        } message: {
-            Text("로그아웃이 완료되면 저장된 사용량을 지우고 앱을 종료합니다. 기존 Codex 로그인 정보를 공유하므로 CLI·IDE 확장에서도 다시 로그인해야 할 수 있습니다.")
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var accountCard: some View {
@@ -233,84 +258,81 @@ struct GaugePanel: View {
                 Circle()
                     .fill(store.errorMessage != nil || store.isStale ? Color.orange : (store.report != nil ? Color.green : Color.secondary))
                     .frame(width: 5, height: 5)
-                Text(store.connectionLabel).font(.caption2)
+                Text("Codex · \(store.connectionLabel)").font(.caption2)
             }
             .foregroundStyle(.secondary)
         }
     }
 
     private var quotaCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("남은 한도").font(.subheadline.weight(.medium))
-                Spacer()
-            }
+        VStack(alignment: .leading, spacing: 8) {
             if let window = store.selectedWindow {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(GaugeStyle.percent(window.quota.remainingPercent))
-                        .font(.system(size: 36, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(GaugeStyle.color(for: window.quota.remainingPercent, celebratingReset: store.isCelebratingReset))
-                    Spacer()
-                    Text(window.durationLabel).font(.caption).foregroundStyle(.secondary)
-                }
-                QuotaGauge(percent: window.quota.remainingPercent, height: 7, celebratingReset: store.isCelebratingReset)
-                Text(window.bucketName).font(.caption).foregroundStyle(.secondary)
-                if let reset = window.quota.resetDate {
-                    TimelineView(.periodic(from: .now, by: 60)) { context in
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("한도 초기화").font(.caption2).foregroundStyle(.secondary)
-                                Text(GaugeStyle.date(reset)).font(.caption)
-                            }
-                            Spacer()
-                            Text(GaugeStyle.remaining(until: reset, now: context.date))
-                                .font(.caption).foregroundStyle(.secondary)
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("남은 한도").font(.caption.weight(.medium))
+                        Text(window.title).font(.caption2).foregroundStyle(.secondary)
+                        if window.id.hasPrefix("claude"), store.claudeError != nil {
+                            Text("이전 조회 값").font(.caption2).foregroundStyle(.orange)
                         }
                     }
-                } else {
-                    Text("초기화 시각이 제공되지 않았습니다.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(GaugeStyle.percent(window.quota.remainingPercent))
+                        .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(GaugeStyle.color(for: window.quota.remainingPercent, celebratingReset: store.isCelebratingReset))
                 }
-                Divider().padding(.vertical, 2)
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("한도별 게이지").font(.caption2.weight(.medium))
-                        Spacer()
-                        Text("체크한 한도가 메뉴 막대에 표시돼요").font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                    ForEach(store.windows) { item in
-                        QuotaRow(window: item, isSelected: item.id == window.id) { store.selectedWindowID = item.id }
-                    }
-                    if let claudeError = store.claudeError {
-                        Label(claudeError, systemImage: "exclamationmark.circle")
-                            .font(.caption2).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                QuotaGauge(percent: window.quota.remainingPercent, height: 5, celebratingReset: store.isCelebratingReset)
             } else {
-                Text("—").font(.system(size: 36, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
-                Text(store.isRefreshing ? "Codex 사용량을 조회하고 있습니다." : "Codex 연결 후 사용 가능한 한도를 표시합니다.")
+                Text("남은 한도").font(.caption.weight(.medium))
+                Text("—").font(.system(size: 22, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
+                Text(store.claudeError != nil && store.selectedWindowID.hasPrefix("claude") ? "Claude 한도를 확인할 수 없습니다." : (store.isRefreshing ? "Codex 사용량을 조회하고 있습니다." : "사용 가능한 한도를 기다리고 있습니다."))
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if !store.windows.isEmpty {
+                Divider()
+                Text("메뉴 막대에 표시할 한도").font(.caption2).foregroundStyle(.secondary)
+                ForEach(store.windows) { item in
+                    QuotaRow(window: item, isSelected: item.id == store.selectedWindowID,
+                             isStale: item.id.hasPrefix("claude") && store.claudeError != nil) { store.selectedWindowID = item.id }
+                }
+            }
+            if let claudeError = store.claudeError {
+                Label(claudeError, systemImage: "exclamationmark.circle")
+                    .font(.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let last = store.claudeLastSuccessAt, !store.claudeWindows.isEmpty {
+                    Text("Claude 마지막 조회 · \(GaugeStyle.date(last)) · 이전 값")
+                        .font(.caption2).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let retry = store.claudeRetryAt {
+                Text("Claude 재조회 가능 · \(GaugeStyle.date(retry)) 이후")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
-        .padding(14)
+        .padding(12)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var tokenCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("토큰 사용량").font(.subheadline.weight(.medium))
-            if let tokens = store.report?.tokens {
-                if let total = tokens.summary?.lifetimeTokens {
-                    metric("계정 누적", value: total.formatted())
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("토큰 사용량").font(.caption.weight(.medium))
+                Spacer()
+                if let latest = store.report?.tokens?.latestBucket {
+                    Text(latest.startDate).font(.caption2).foregroundStyle(.secondary)
+                        .help("최근 일별 기록의 서비스 기준 날짜")
                 }
-                if let latest = tokens.latestBucket {
-                    metric("최근 일별 기록", value: latest.tokens.formatted())
-                    Text("서비스 기준 날짜 · \(latest.startDate)")
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+            }
+            if let tokens = store.report?.tokens {
+                HStack(spacing: 16) {
+                    if let total = tokens.summary?.lifetimeTokens {
+                        tokenMetric("누적", value: total)
+                    }
+                    if let latest = tokens.latestBucket {
+                        tokenMetric("최근 일별", value: latest.tokens)
+                    }
                 }
                 if tokens.summary?.lifetimeTokens == nil, tokens.latestBucket == nil {
                     Text("표시할 토큰 기록이 없습니다.").font(.caption).foregroundStyle(.secondary)
@@ -322,30 +344,31 @@ struct GaugePanel: View {
                 Text(notice).font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("구독 한도 비율과 토큰 수는 서로 다른 지표입니다.")
-                .font(.caption2).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 2)
+        .help("구독 한도 비율과 토큰 수는 서로 다른 지표입니다. 숫자 위에 마우스를 올리면 정확한 토큰 수를 볼 수 있어요.")
     }
 
-    private func metric(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label).font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).font(.subheadline.weight(.medium)).monospacedDigit()
+    private func tokenMetric(_ label: String, value: Int64) -> some View {
+        HStack(spacing: 5) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(GaugeStyle.compactTokens(value)).font(.caption.weight(.medium)).monospacedDigit()
                 .textSelection(.enabled)
+                .help("\(value.formatted()) 토큰")
+                .accessibilityLabel("\(value.formatted()) 토큰")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Divider()
             HStack(spacing: 5) {
                 if store.isRefreshing {
                     ProgressView().controlSize(.mini)
                     Text("갱신 중")
                 } else if let lastUpdated = store.lastUpdated {
-                    Text("마지막 갱신 · \(GaugeStyle.date(lastUpdated))")
+                    Text("Codex 갱신 · \(GaugeStyle.date(lastUpdated))")
                 } else {
                     Text("아직 조회되지 않았습니다.")
                 }

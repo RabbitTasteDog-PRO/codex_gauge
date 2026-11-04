@@ -19,6 +19,8 @@ final class UsageStore: ObservableObject {
     @Published private(set) var resetTracker = QuotaResetTracker()
     @Published private(set) var claudeWindows: [UsageWindow] = []
     @Published private(set) var claudeError: String?
+    @Published private(set) var claudeRetryAt: Date?
+    @Published private(set) var claudeLastSuccessAt: Date?
     @Published var selectedWindowID: String {
         didSet { defaults.set(selectedWindowID, forKey: "selectedWindowID") }
     }
@@ -31,6 +33,10 @@ final class UsageStore: ObservableObject {
     private let authentication: any AccountAuthenticating
     private let claudeProvider: (any ClaudeUsageProviding)?
     private var isRefreshingClaude = false
+    private var claudeLastAttemptAt: Date?
+    private var claudePollingTask: Task<Void, Never>?
+    private var claudeRateLimitCount: Int
+    private let now: () -> Date
     private var pollingTask: Task<Void, Never>?
     private var refreshTask: Task<UsageSnapshot, Error>?
     private var loginTask: Task<Void, Never>?
@@ -52,8 +58,14 @@ final class UsageStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard, provider: any UsageProviding = CodexUsageProvider(),
          authentication: any AccountAuthenticating = CodexAuthentication(),
-         claudeProvider: (any ClaudeUsageProviding)? = nil) {
+         claudeProvider: (any ClaudeUsageProviding)? = nil, now: @escaping () -> Date = Date.init) {
         self.defaults = defaults
+        self.now = now
+        claudeRateLimitCount = max(0, defaults.integer(forKey: "claudeRateLimitCount"))
+        if let retry = defaults.object(forKey: "claudeRetryAt") as? Date, retry > now() {
+            claudeRetryAt = retry
+            claudeError = ClaudeUsageError.rateLimited(retryAfter: nil).errorDescription
+        }
         self.claudeProvider = claudeProvider
         snapshotProvider = (provider as? any UsageSnapshotProviding)
             ?? AuthenticatedUsageAdapter(provider: provider, authentication: authentication)
@@ -68,7 +80,11 @@ final class UsageStore: ObservableObject {
 
     /// Codex quotas first, then Claude quotas; the checked one drives the menu bar.
     var windows: [UsageWindow] { (report?.limits.windows ?? []) + claudeWindows }
-    var selectedWindow: UsageWindow? { windows.first { $0.id == selectedWindowID } ?? windows.first }
+    var selectedWindow: UsageWindow? {
+        if let selected = windows.first(where: { $0.id == selectedWindowID }) { return selected }
+        if selectedWindowID.hasPrefix("claude"), claudeError != nil { return nil }
+        return windows.first
+    }
     var isCelebratingReset: Bool {
         guard let window = selectedWindow else { return false }
         return window.quota.usedPercent == 0 && resetTracker.pendingWindowIDs.contains(window.id)
@@ -134,6 +150,16 @@ final class UsageStore: ObservableObject {
     func start(refreshImmediately: Bool = true) {
         guard pollingTask == nil, initialLaunchBrowser == nil, !shouldTerminate,
               !isAuthenticating, !pollingSuspended, !isStopped else { return }
+        if claudeProvider != nil {
+            claudePollingTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(nanoseconds: 60_000_000_000) }
+                    catch { return }
+                    guard let self else { return }
+                    await self.refreshClaude()
+                }
+            }
+        }
         pollingTask = Task { [weak self] in
             if !refreshImmediately {
                 do { try await Task.sleep(nanoseconds: 60_000_000_000) }
@@ -162,6 +188,8 @@ final class UsageStore: ObservableObject {
     }
 
     private func pausePolling() {
+        claudePollingTask?.cancel()
+        claudePollingTask = nil
         launchDecisionTask?.cancel()
         launchDecisionTask = nil
         launchDecisionID = nil
@@ -244,15 +272,39 @@ final class UsageStore: ObservableObject {
 
     /// Claude limits are read independently so a Codex failure never hides them (and vice versa).
     func refreshClaude() async {
-        guard let claudeProvider, !isRefreshingClaude, !isStopped else { return }
+        guard let claudeProvider, !isRefreshingClaude, !isStopped, !pollingSuspended else { return }
+        if let retry = claudeRetryAt, now() < retry { return }
+        if let last = claudeLastAttemptAt, now().timeIntervalSince(last) < 60 { return }
+        claudeLastAttemptAt = now()
         isRefreshingClaude = true
         defer { isRefreshingClaude = false }
         do {
             claudeWindows = try await claudeProvider.fetchWindows()
+            claudeLastSuccessAt = now()
             claudeError = nil
+            claudeRetryAt = nil
+            claudeRateLimitCount = 0
+            defaults.removeObject(forKey: "claudeRetryAt")
+            defaults.removeObject(forKey: "claudeRateLimitCount")
         } catch is CancellationError {
             return
         } catch {
+            if case ClaudeUsageError.rateLimited(let serverDelay) = error {
+                claudeRateLimitCount = min(claudeRateLimitCount + 1, 5)
+                let fallback = min(3600.0, 300.0 * pow(2.0, Double(claudeRateLimitCount - 1)))
+                let delay = max(fallback, serverDelay ?? 0)
+                let retry = now().addingTimeInterval(delay)
+                claudeRetryAt = retry
+                defaults.set(retry, forKey: "claudeRetryAt")
+                defaults.set(claudeRateLimitCount, forKey: "claudeRateLimitCount")
+            } else {
+                claudeWindows = []
+                claudeLastSuccessAt = nil
+                claudeRetryAt = nil
+                claudeRateLimitCount = 0
+                defaults.removeObject(forKey: "claudeRetryAt")
+                defaults.removeObject(forKey: "claudeRateLimitCount")
+            }
             claudeError = (error as? LocalizedError)?.errorDescription ?? "Claude 사용량을 가져오지 못했어요."
         }
     }

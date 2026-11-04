@@ -5,6 +5,7 @@ public enum ClaudeUsageError: Error, LocalizedError, Sendable, Equatable {
     case keychainTimedOut
     case tokenExpired
     case unauthorized
+    case rateLimited(retryAfter: TimeInterval?)
     case requestFailed(status: Int)
     case invalidResponse
 
@@ -14,6 +15,7 @@ public enum ClaudeUsageError: Error, LocalizedError, Sendable, Equatable {
         case .keychainTimedOut: return "키체인 접근 허용을 기다리다 시간이 초과됐어요. 허용 창에서 '항상 허용'을 누른 뒤 새로고침하세요."
         case .tokenExpired: return "Claude Code 로그인이 만료됐어요. claude를 한 번 실행하면 다시 갱신돼요."
         case .unauthorized: return "Claude 사용량 조회 권한이 없어요. Claude Code에 구독 계정으로 로그인하세요."
+        case .rateLimited: return "Claude 요청이 제한됐어요. 잠시 후 다시 확인합니다."
         case .requestFailed(let status): return "Claude 사용량을 가져오지 못했어요. (오류 \(status))"
         case .invalidResponse: return "Claude 사용량 응답 형식을 읽지 못했어요."
         }
@@ -37,10 +39,25 @@ public struct ClaudeUsageProvider: ClaudeUsageProviding {
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let http = response as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
         if status == 401 || status == 403 { throw ClaudeUsageError.unauthorized }
+        if status == 429 { throw ClaudeUsageError.rateLimited(retryAfter: Self.retryDelay(from: http?.value(forHTTPHeaderField: "Retry-After"))) }
         guard status == 200 else { throw ClaudeUsageError.requestFailed(status: status) }
         return try Self.parseWindows(data)
+    }
+
+    /// A zero or invalid value supplies no useful wait and falls back to local backoff.
+    static func retryDelay(from header: String?, now: Date = Date()) -> TimeInterval? {
+        guard let header else { return nil }
+        let text = header.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = TimeInterval(text), seconds.isFinite, seconds > 0 { return seconds }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss 'GMT'"
+        guard let date = formatter.date(from: text), date > now else { return nil }
+        return date.timeIntervalSince(now)
     }
 
     /// Known limit keys, in display order.
